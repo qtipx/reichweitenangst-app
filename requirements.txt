@@ -2,3 +2,5 @@ gpxpy
 pandas
 numpy
 plotly
+folium
+streamlit-folium
