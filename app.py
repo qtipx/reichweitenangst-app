@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- DATENBANK ---
+# --- KONFIGURATION & DATEN ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.80, "drag_factor": 0.6, "default_cap": 750},
     "DJI Avinox (M1/M2)": {"modes": {"Eco": 1.0, "Auto": 2.5, "Trail": 4.5, "Turbo": 7.0, "Boost": 8.0}, "efficiency": 0.83, "drag_factor": 0.3, "default_cap": 800},
@@ -38,13 +38,13 @@ with st.sidebar:
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
-    # Startwert Strategie
     if not st.session_state.modes:
         st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
 
     with st.expander("👤 Setup"):
         c1, c2 = st.columns(2)
-        u_weight, extra_load = c1.number_input("Fahrer Kg", 50, 150, 95), c2.number_input("Last Kg", 0, 30, 5)
+        u_weight = c1.number_input("Fahrer Kg", 50, 150, 95)
+        extra_load = c2.number_input("Last Kg", 0, 30, 5)
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
 
@@ -84,18 +84,18 @@ with st.sidebar:
             if lc3.button("🗑️", key=f"cdel_{i}"): st.session_state.charges.pop(i); st.rerun()
 
 # --- RECHNERKERN ---
-def run_calc(points, weight, temp, v_flat_val, motor_name, main_wh_val):
+def run_calc(points, weight, temp, speed_flat, motor_name, main_cap_val):
     df = pd.DataFrame(points)
     m_spec = MOTOR_SYSTEMS[motor_name]
-    df['ele_diff'], df['dist_diff'] = df['ele'].diff().fillna(0), df['dist_diff'].fillna(0)
+    df['ele_diff'] = df['ele'].diff().fillna(0)
+    df['dist_diff'] = df['dist_diff'].fillna(0)
     
-    # Geschwindigkeitsszenario
-    df['v_ms'] = np.where(df['ele_diff'] > 0, 12/3.6, v_flat_val/3.6)
+    # Der Slider v_flat beeinflusst hier direkt die v_ms
+    df['v_ms'] = np.where(df['ele_diff'] > 0, 12/3.6, speed_flat/3.6)
     df['dur'] = df['dist_diff'] / df['v_ms']
     
-    # Akku-Setup
-    system_cap = main_wh_val + sum(e['wh'] for e in st.session_state.extenders)
-    battery_stack = [{'cap': system_cap, 'label': 'System'}] + [{'cap': s['wh'], 'label': f'Ersatz {i+1}'} for i, s in enumerate(st.session_state.spare_batteries)]
+    sys_cap = main_cap_val + sum(e['wh'] for e in st.session_state.extenders)
+    battery_stack = [{'cap': sys_cap, 'label': 'System'}] + [{'cap': s['wh'], 'label': f'Ersatz {i+1}'} for i, s in enumerate(st.session_state.spare_batteries)]
     
     curr_idx, cons, last_p = 0, 0, 100.0
     pcts, events, markers, labels = [], [], [], []
@@ -108,24 +108,26 @@ def run_calc(points, weight, temp, v_flat_val, motor_name, main_wh_val):
         ev = None
         
         if active_c and km >= active_c[0]['km']:
-            c = active_c.pop(0); target = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
+            c = active_c.pop(0)
+            target = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
             if cons > target: cons = target
             ev = 'charge'
         
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0):
             ev = 'mode_change' if not ev else ev
 
-        # Physikalische Leistung (v^3 Luftwiderstand)
-        p_air = 0.5 * AIR_DENSITY * v**3 * CW_AREA
+        # Physik (Leistung)
+        p_air = 0.5 * AIR_DENSITY * (v**3) * CW_AREA
         p_roll = weight * GRAVITY * CRR_FOREST * v
         p_slope = (weight * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)
         p_req = p_slope + p_roll + p_air
         
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(m_spec['modes'].keys())[-1])
         p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 150)
-        e_seg = (m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)) if df['ele_diff'].iloc[i] <= 0 else (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / m_spec['efficiency']) * tf)
         
+        e_seg = (m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)) if df['ele_diff'].iloc[i] <= 0 else (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / m_spec['efficiency']) * tf)
         cons += e_seg
+        
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack) - 1:
             curr_idx += 1; cons, ev, last_p = 0, 'swap', 100.0
             
@@ -155,6 +157,7 @@ if file:
 if st.session_state.points_data:
     df = run_calc(st.session_state.points_data, u_weight+BIKE_WEIGHT+extra_load, temp, v_flat, sel_motor, m_wh)
     
+    st.markdown(f"### 🚩 Tour Analyse")
     cols = st.columns(4)
     cols[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
     cols[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
@@ -172,12 +175,14 @@ if st.session_state.points_data:
         
         m_df = df[df['marker'].notnull()]
         if not m_df.empty:
-            fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
+            fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+20, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
         
         sw_df, ch_df, st_df = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
-        if not sw_df.empty: fig.add_trace(go.Scatter(x=sw_df['cum_dist'], y=sw_df['ele']+60, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
-        if not ch_df.empty: fig.add_trace(go.Scatter(x=ch_df['cum_dist'], y=ch_df['ele']+60, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
-        if not st_df.empty: fig.add_trace(go.Scatter(x=st_df['cum_dist'], y=st_df['ele']+60, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategiewechsel"))
+        if not sw_df.empty: fig.add_trace(go.Scatter(x=sw_df['cum_dist'], y=sw_df['ele']+50, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
+        if not ch_df.empty: fig.add_trace(go.Scatter(x=ch_df['cum_dist'], y=ch_df['ele']+50, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
+        if not st_df.empty: fig.add_trace(go.Scatter(x=st_df['cum_dist'], y=st_df['ele']+50, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
+        
+        fig.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
         
     else:
