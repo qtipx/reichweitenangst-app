@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. MOTOREN-DATENBANK ---
+# --- 1. MOTOREN-DATENBANK (17 Modelle) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -30,7 +30,7 @@ MOTOR_SYSTEMS = {
     "Mahle X20 / X35": {"modes": {"Eco": 0.30, "Mid": 0.60, "High": 1.00}, "efficiency": 0.86}
 }
 
-BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.65, 0.015 
+BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
@@ -52,8 +52,9 @@ with st.sidebar:
         extra_load = c2.number_input("Last Kg", 0, 30, 5)
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
-        # Korrekturfaktor jetzt von -2.0 bis 2.0
-        k_factor = st.slider("Korrekturfaktor", -2.0, 2.0, 1.0, 0.05)
+        # Korrekturwert -1 bis +1, Default 0
+        k_val = st.slider("Korrekturfaktor", -1.0, 1.0, 0.0, 0.05)
+        k_factor = 1.0 + k_val
 
     with st.expander("🔋 Akkus", expanded=True):
         m_wh = st.number_input("Hauptakku Wh", 200, 1000, 625)
@@ -78,7 +79,7 @@ with st.sidebar:
             st.session_state.charges[i]['km'] = lc1.number_input(f"km {i}", 0, 250, c['km'], label_visibility="collapsed")
             st.session_state.charges[i]['pct'] = lc2.number_input(f"% {i}", 1, 100, c['pct'], label_visibility="collapsed")
 
-# --- HAUPTFENSTER ---
+# --- RECHNER ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -113,10 +114,9 @@ if file:
             c = active_c.pop(0); cons = min(cons, battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)); ev = 'charge'
         
         p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
-        
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(spec['modes'].keys())[-1])
-        # P_mot Berechnung inkl. k_factor
-        p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 120)) * k_factor
+        # P_mot wird mit dem neutralen k_factor (1.0 +/- X) multipliziert
+        p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 150)) * k_factor
         e_seg = (((max(0.01, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
         cons += e_seg
         
@@ -151,7 +151,7 @@ if file:
         if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+50, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
         if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+50, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
         if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+50, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
-        st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}_{k_factor}")
+        st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}_{k_val}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
         Fullscreen().add_to(m); df_map = df.iloc[::2]
