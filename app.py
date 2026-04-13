@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. ERWEITERTE MOTOREN-DATENBANK ---
+# --- 1. ERWEITERTE MOTOREN-DATENBANK (18 SYSTEME) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -173,37 +173,35 @@ if st.session_state.points_data:
     
     if ansicht == "Höhenprofil":
         fig = go.Figure()
-        # Schatten-Profil
-        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip'))
-        # Farbige Linie
+        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(150,150,150,0.1)', line=dict(width=0), hoverinfo='skip'))
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
-        # %-MARKER MIT ABSTAND
+        # %-MARKER FIX
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
             fig.add_trace(go.Scatter(
                 x=m_pts['cum_dist'], 
-                y=m_pts['ele'] + 80, # Höherer Offset gegen Überschneidung
+                y=m_pts['ele'] + 60, 
                 mode='markers+text',
-                text=[f"<b>{int(v)}%</b>" for v in m_pts['marker']], 
-                textfont=dict(color="white", size=11), 
+                text=[f"{int(v)}%" for v in m_pts['marker']], 
+                textfont=dict(color="black", size=12), 
                 textposition="top center", 
-                marker=dict(color='rgba(255,255,255,0.8)', size=6, line=dict(color='black', width=1)), 
+                marker=dict(color='white', size=8, line=dict(color='black', width=1.5)), 
                 showlegend=False
             ))
         
-        # SYMBOLE
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
         if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+120, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
         if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+120, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
         if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+120, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
         
-        fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=500, xaxis_title="km", yaxis_title="m", template="plotly_dark")
+        fig.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=550, xaxis_title="km", yaxis_title="Höhe (m)", template="plotly_white")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="CartoDB dark_matter")
+        # KARTE HELL EINGESTELLT
+        m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="OpenStreetMap")
         Fullscreen().add_to(m)
         df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
@@ -214,5 +212,5 @@ if st.session_state.points_data:
             if r['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif r['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
             elif not np.isnan(r['marker']): 
-                folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size: 10pt; font-weight: bold; color: white; background: rgba(0,0,0,0.6); padding: 2px 5px; border-radius: 4px; border: 1px solid white;">{int(r["marker"])}%</div>')).add_to(m)
+                folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size: 10pt; font-weight: bold; color: black; background: rgba(255,255,255,0.8); padding: 2px 5px; border-radius: 4px; border: 1px solid black;">{int(r["marker"])}%</div>')).add_to(m)
         folium_static(m, width=1200, height=750)
