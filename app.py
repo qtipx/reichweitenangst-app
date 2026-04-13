@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. MOTOREN-DATENBANK (17 Modelle) ---
+# --- 1. MOTOREN-DATENBANK ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -52,8 +52,8 @@ with st.sidebar:
         extra_load = c2.number_input("Last Kg", 0, 30, 5)
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
-        # Korrekturfaktor jetzt von -1.0 bis 2.0
-        k_factor = st.slider("Korrekturfaktor", -1.0, 2.0, 1.0, 0.05)
+        # Korrekturfaktor jetzt von -2.0 bis 2.0
+        k_factor = st.slider("Korrekturfaktor", -2.0, 2.0, 1.0, 0.05)
 
     with st.expander("🔋 Akkus", expanded=True):
         m_wh = st.number_input("Hauptakku Wh", 200, 1000, 625)
@@ -113,9 +113,11 @@ if file:
             c = active_c.pop(0); cons = min(cons, battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)); ev = 'charge'
         
         p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
+        
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(spec['modes'].keys())[-1])
+        # P_mot Berechnung inkl. k_factor
         p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 120)) * k_factor
-        e_seg = (((max(0.1, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
+        e_seg = (((max(0.01, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
         cons += e_seg
         
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack)-1:
@@ -152,8 +154,7 @@ if file:
         st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}_{k_factor}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
-        Fullscreen().add_to(m)
-        df_map = df.iloc[::2]
+        Fullscreen().add_to(m); df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
             z_df = df_map[df_map['z_id'] == zid]
             folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6).add_to(m)
