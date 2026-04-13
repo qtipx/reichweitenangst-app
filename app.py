@@ -7,7 +7,7 @@ import folium
 from folium.plugins import Fullscreen
 from streamlit_folium import folium_static
 import time
-import os
+import os 
 
 # --- 1. DATENBANK ---
 MOTOR_SYSTEMS = {
