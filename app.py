@@ -126,6 +126,9 @@ if st.session_state.points_data:
     curr_idx, cons, last_p = 0, 0, 100.0
     pcts, events, markers = [], [], []
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
+    
+    # Hilfsliste für Schwellenwerte
+    thresholds = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0]
 
     for i in range(len(df)):
         km, v = df['cum_dist'].iloc[i], df['v_ms'].iloc[i]
@@ -149,11 +152,18 @@ if st.session_state.points_data:
         p = max(0, ((battery_stack[curr_idx]['cap'] - cons) / battery_stack[curr_idx]['cap']) * 100)
         pcts.append(p)
         
+        # Korrigierte Marker-Logik
+        m_val = np.nan
+        for t in thresholds:
+            if last_p >= t and p < t:
+                m_val = t
+                break
+        markers.append(m_val)
+        
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0):
             ev = 'mode_change' if not ev else ev
             
         events.append(ev)
-        markers.append(next((t for t in [90,80,70,60,50,40,30,20,10,0] if last_p > t >= p), np.nan))
         last_p = p
 
     df['battery_pct'], df['event'], df['marker'] = pcts, events, markers
@@ -176,12 +186,14 @@ if st.session_state.points_data:
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
+        # %-LABELS & MARKER
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
             fig.add_trace(go.Scatter(x=m_pts['cum_dist'], y=m_pts['ele'] + 40, mode='markers+text',
                 text=[f"<b>{int(v)}%</b>" for v in m_pts['marker']], textfont=dict(color="black", size=12), 
                 textposition="top center", marker=dict(color='white', size=8, line=dict(color='black', width=1.5)), showlegend=False))
         
+        # SYMBOLE
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
         if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+75, mode='markers', marker=dict(color='#2E91E5', size=14, symbol='square'), name="Wechsel"))
         if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+75, mode='markers', marker=dict(color='#EF553B', size=14, symbol='star'), name="Laden"))
