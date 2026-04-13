@@ -9,21 +9,33 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. MOTOREN-DATENBANK ---
+# --- 1. ERWEITERTE MOTOREN-DATENBANK (18 SYSTEME) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
+    "Bosch Performance Line SX": {"modes": {"Eco": 0.60, "Tour+": 1.40, "Sport": 2.20, "Turbo": 3.40}, "efficiency": 0.83},
     "Shimano EP801 / EP8": {"modes": {"Eco": 0.60, "Trail": 1.50, "Boost": 3.50}, "efficiency": 0.79},
-    "Specialized / Brose Mag S": {"modes": {"Eco": 0.35, "Trail": 1.00, "Turbo": 4.10}, "efficiency": 0.82},
+    "Shimano E8000 (Steps)": {"modes": {"Eco": 0.50, "Trail": 1.10, "Boost": 3.00}, "efficiency": 0.75},
+    "Specialized 2.2 (Brose Mag S)": {"modes": {"Eco": 0.35, "Trail": 1.00, "Turbo": 4.10}, "efficiency": 0.82},
+    "Specialized SL 1.2 (Mahle)": {"modes": {"Eco": 0.40, "Trail": 1.00, "Turbo": 3.20}, "efficiency": 0.84},
     "DJI Avinox (M1/M2)": {"modes": {"Eco": 1.00, "Auto": 2.50, "Trail": 4.50, "Turbo": 7.00}, "efficiency": 0.85},
-    "Pinion MGU (E1.12)": {"modes": {"Eco": 0.80, "Flow": 1.60, "Flex": 2.80, "Fly": 4.00}, "efficiency": 0.77}
+    "Pinion MGU (E1.12)": {"modes": {"Eco": 0.80, "Flow": 1.60, "Flex": 2.80, "Fly": 4.00}, "efficiency": 0.77},
+    "Yamaha PW-X3": {"modes": {"Eco": 0.50, "Std": 1.90, "High": 2.80, "ExPW": 3.60}, "efficiency": 0.78},
+    "Yamaha PW-ST": {"modes": {"Eco": 0.50, "Std": 1.90, "High": 2.80}, "efficiency": 0.76},
+    "Brose Drive S Mag": {"modes": {"Eco": 0.40, "Tour": 1.20, "Sport": 2.20, "Turbo": 4.10}, "efficiency": 0.81},
+    "Fazua Ride 60": {"modes": {"Breeze": 0.60, "River": 1.50, "Rocket": 3.50}, "efficiency": 0.83},
+    "Fazua Evation 50": {"modes": {"Breeze": 0.50, "River": 1.30, "Rocket": 2.50}, "efficiency": 0.80},
+    "TQ HPR50": {"modes": {"Eco": 0.40, "Mid": 1.20, "High": 3.00}, "efficiency": 0.84},
+    "Giant SyncDrive Pro (Yamaha)": {"modes": {"Eco": 0.75, "Basic": 1.75, "Active": 2.50, "Sport": 3.00, "Power": 3.60}, "efficiency": 0.79},
+    "Rocky Mountain Dyname 4.0": {"modes": {"Eco": 0.45, "Trail": 1.20, "Ludicrous": 3.50}, "efficiency": 0.76},
+    "Panasonic GX Ultimate": {"modes": {"Eco": 0.70, "Std": 1.50, "Auto": 2.30, "High": 3.00}, "efficiency": 0.78}
 }
 
 BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
-# Persistent State Management (WICHTIG!)
+# Persistent State Management
 for key in ['charges', 'modes', 'extenders', 'spare_batteries', 'points_data', 't_name']:
     if key not in st.session_state:
         st.session_state[key] = [] if key not in ['points_data', 't_name'] else None
@@ -32,7 +44,10 @@ for key in ['charges', 'modes', 'extenders', 'spare_batteries', 'points_data', '
 with st.sidebar:
     if os.path.exists("reichweitenangst.png"):
         st.image("reichweitenangst.png", use_container_width=True)
-    st.markdown("<h2 style='text-align: center; color: #F7D106;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
+    
+    st.markdown("<h2 style='text-align: center; color: #F7D106; margin-bottom: 0px;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 0.9em; margin-top: 0px;'>By Markus Lissner | <a href='mailto:m@lissner.de'>m@lissner.de</a></p>", unsafe_allow_html=True)
+    st.divider()
     
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
@@ -116,28 +131,24 @@ if st.session_state.points_data:
         km, v = df['cum_dist'].iloc[i], df['v_ms'].iloc[i]
         ev = None
         
-        # LADESTOPPS
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0)
             target_cons = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
             if cons > target_cons: cons = target_cons
             ev = 'charge'
         
-        # PHYSIK
         p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(spec['modes'].keys())[-1])
         p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 150)) * k_factor
         e_seg = (((max(0.01, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
         cons += e_seg
         
-        # AKKUWECHSEL
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack)-1:
             curr_idx += 1; cons, ev, last_p = 0, 'swap', 100.0
         
         p = max(0, ((battery_stack[curr_idx]['cap'] - cons) / battery_stack[curr_idx]['cap']) * 100)
         pcts.append(p)
         
-        # STRATEGIEWECHSEL LOGIK
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0):
             ev = 'mode_change' if not ev else ev
             
@@ -165,14 +176,12 @@ if st.session_state.points_data:
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
-        # %-LABELS & MARKER
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
             fig.add_trace(go.Scatter(x=m_pts['cum_dist'], y=m_pts['ele'] + 40, mode='markers+text',
                 text=[f"<b>{int(v)}%</b>" for v in m_pts['marker']], textfont=dict(color="black", size=12), 
                 textposition="top center", marker=dict(color='white', size=8, line=dict(color='black', width=1.5)), showlegend=False))
         
-        # SYMBOLE
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
         if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+75, mode='markers', marker=dict(color='#2E91E5', size=14, symbol='square'), name="Wechsel"))
         if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+75, mode='markers', marker=dict(color='#EF553B', size=14, symbol='star'), name="Laden"))
