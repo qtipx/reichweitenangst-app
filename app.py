@@ -28,7 +28,7 @@ BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
-# Persistent State Management
+# State Management
 for key in ['charges', 'modes', 'extenders', 'spare_batteries', 'points_data', 't_name']:
     if key not in st.session_state: st.session_state[key] = [] if 'data' not in key else None
 
@@ -73,7 +73,7 @@ with st.sidebar:
             st.session_state.charges[i]['km'] = lc1.number_input(f"km {i}", 0, 250, c['km'], key=f"ckm_{i}")
             st.session_state.charges[i]['pct'] = lc2.number_input(f"% {i}", 1, 100, c['pct'], key=f"cpct_{i}")
 
-# --- GPX LOGIK ---
+# --- GPX & PHYSIK ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -95,12 +95,12 @@ if st.session_state.points_data:
     df['dur'] = df['dist_diff'] / df['v_ms']
     
     sys_cap = m_wh + sum(e['wh'] for e in st.session_state.extenders)
-    battery_stack = [{'cap': sys_cap, 'label': 'System'}] + [{'cap': s['wh'], 'label': f'Ersatz {i+1}'} for i, s in enumerate(st.session_state.spare_batteries)]
+    battery_stack = [{'cap': sys_cap}] + [{'cap': s['wh']} for s in st.session_state.spare_batteries]
     
     active_c = sorted([dict(c) for c in st.session_state.charges], key=lambda x: x['km'])
     sorted_modes = sorted([dict(m) for m in st.session_state.modes], key=lambda x: x['km'])
     curr_idx, cons, last_p = 0, 0, 100.0
-    pcts, events, markers, b_labels = [], [], [], []
+    pcts, events, markers = [], [], []
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
 
     for i in range(len(df)):
@@ -119,15 +119,15 @@ if st.session_state.points_data:
             curr_idx += 1; cons, ev, last_p = 0, 'swap', 100.0
         
         p = max(0, ((battery_stack[curr_idx]['cap'] - cons) / battery_stack[curr_idx]['cap']) * 100)
-        pcts.append(p); b_labels.append(battery_stack[curr_idx]['label'])
+        pcts.append(p)
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0): ev = 'mode_change' if not ev else ev
         events.append(ev); markers.append(next((t for t in [90,80,70,60,50,40,30,20,10,0] if last_p > t >= p), np.nan)); last_p = p
 
-    df['battery_pct'], df['event'], df['marker'], df['batt_label'] = pcts, events, markers, b_labels
+    df['battery_pct'], df['event'], df['marker'] = pcts, events, markers
     df['color'] = np.select([df['battery_pct']>20, df['battery_pct']>10, df['battery_pct']>0], ['#00CC96', '#FFD700', '#FF4B4B'], default='#85144b')
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
 
-    # --- UI AUSGABE ---
+    # --- UI ---
     st.markdown(f"### 🚩 {st.session_state.t_name}")
     c = st.columns(3)
     c[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
@@ -137,40 +137,31 @@ if st.session_state.points_data:
     ansicht = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True, label_visibility="collapsed")
     if ansicht == "Höhenprofil":
         fig = go.Figure()
-        # 1. Fläche (Hintergrund)
         fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip'))
-        
-        # 2. Linie (in Segmenten für Farbe)
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
-        # 3. %-Marker (ALLE 10%) - Fixierte y-Position über der Linie
+        # FIX: Marker und Text explizit als oberste Schicht
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
             fig.add_trace(go.Scatter(
-                x=m_pts['cum_dist'], 
-                y=m_pts['ele'] + 30, # y-Offset nach oben
-                mode='markers+text', 
-                text=[f"{int(v)}%" for v in m_pts['marker']], 
-                textfont=dict(color="white", size=10), 
-                textposition="top center", 
-                marker=dict(color='white', size=4),
+                x=m_pts['cum_dist'], y=m_pts['ele'] + 30, mode='markers+text',
+                text=[f"{int(v)}%" for v in m_pts['marker']],
+                textfont=dict(color="white", size=11, family="Arial Black"),
+                textposition="top center",
+                marker=dict(color='white', size=6, line=dict(color='black', width=1.5)),
                 showlegend=False
             ))
         
-        # 4. Event-Symbole (Laden, Wechsel, Strategie)
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
         if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+60, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
         if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+60, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
         if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+60, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
-        
-        fig.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}_{k_val}")
+        st.plotly_chart(fig, use_container_width=True, key=f"profile_{v_flat}_{k_val}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
-        Fullscreen().add_to(m)
-        df_map = df.iloc[::2]
+        Fullscreen().add_to(m); df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
             z_df = df_map[df_map['z_id'] == zid]
             folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6).add_to(m)
@@ -178,21 +169,17 @@ if st.session_state.points_data:
             loc = [r['lat'], r['lon']]
             if r['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif r['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
-            # FIX: Optimierte Darstellung auf der Map für maximale Lesbarkeit
+            # FIX: Breiterer Hintergrund für %-Zahlen auf der Map
             elif not np.isnan(r['marker']): 
                 html_icon = f'''
                     <div style="
-                        font-size: 10pt; 
-                        font-weight: bold; 
-                        color: black; 
-                        background-color: rgba(255, 255, 255, 0.85); 
-                        padding: 3px 6px; 
-                        border-radius: 4px; 
-                        border: 1px solid darkgray; 
-                        white-space: nowrap;
+                        font-size: 11pt; font-weight: bold; color: black; 
+                        background-color: rgba(255, 255, 255, 0.9); 
+                        padding: 4px 10px; border-radius: 6px; 
+                        border: 2px solid #333; white-space: nowrap;
                     ">
-                        <strong>{int(r["marker"])}%</strong>
+                        {int(r["marker"])}%
                     </div>
                 '''
-                folium.Marker(loc, icon=folium.DivIcon(html=html_icon, icon_anchor=(20, 10))).add_to(m)
+                folium.Marker(loc, icon=folium.DivIcon(html=html_icon, icon_anchor=(25, 12))).add_to(m)
         folium_static(m, width=1200, height=750)
