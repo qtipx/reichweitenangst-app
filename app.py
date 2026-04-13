@@ -31,7 +31,8 @@ MOTOR_SYSTEMS = {
     "Panasonic GX Ultimate": {"modes": {"Eco": 0.70, "Std": 1.50, "Auto": 2.30, "High": 3.00}, "efficiency": 0.78}
 }
 
-BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012 
+# Konstanten (ohne Bike-Gewicht)
+GRAVITY, AIR_DENSITY, CW_AREA, CRR = 9.81, 1.225, 0.58, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
@@ -54,6 +55,9 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         u_weight = c1.number_input("Fahrer Kg", 50, 150, 95)
         extra_load = c2.number_input("Last Kg", 0, 30, 5)
+        # Neues Eingabefeld für Bike Gewicht
+        bike_weight = st.number_input("Bike Gewicht Kg", 5.0, 50.0, 25.0, step=0.5)
+        
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
         k_val = st.slider("Korrekturfaktor", -1.0, 1.0, 0.0, 0.05)
@@ -109,7 +113,8 @@ if file:
 
 if st.session_state.points_data:
     df = pd.DataFrame(st.session_state.points_data)
-    total_w = u_weight + BIKE_WEIGHT + extra_load
+    # Gesamtes Gewicht nutzt nun das Eingabefeld bike_weight
+    total_w = u_weight + bike_weight + extra_load
     df['ele_diff'] = df['ele'].diff().fillna(0)
     df['v_ms'] = np.where(df['ele_diff'] > 0, 15/3.6, v_flat/3.6)
     df['dur'] = df['dist_diff'] / df['v_ms']
@@ -178,7 +183,6 @@ if st.session_state.points_data:
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
-        # %-MARKER FIX
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
             fig.add_trace(go.Scatter(
@@ -200,7 +204,6 @@ if st.session_state.points_data:
         fig.update_layout(margin=dict(l=0, r=0, t=30, b=0), height=550, xaxis_title="km", yaxis_title="Höhe (m)", template="plotly_white")
         st.plotly_chart(fig, use_container_width=True)
     else:
-        # KARTE HELL EINGESTELLT
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="OpenStreetMap")
         Fullscreen().add_to(m)
         df_map = df.iloc[::2]
