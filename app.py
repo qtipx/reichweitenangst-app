@@ -30,14 +30,16 @@ MOTOR_SYSTEMS = {
     "Mahle X20 / X35": {"modes": {"Eco": 0.30, "Mid": 0.60, "High": 1.00}, "efficiency": 0.86}
 }
 
+# Physikalische Konstanten für realistische Simulation
 BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
+# State Management
 for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
     if key not in st.session_state: st.session_state[key] = []
 
-# --- SIDEBAR ---
+# --- 2. SIDEBAR ---
 with st.sidebar:
     if os.path.exists("reichweitenangst.png"):
         st.image("reichweitenangst.png", use_container_width=True)
@@ -52,7 +54,6 @@ with st.sidebar:
         extra_load = c2.number_input("Last Kg", 0, 30, 5)
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
-        # Korrekturwert -1 bis +1, Default 0
         k_val = st.slider("Korrekturfaktor", -1.0, 1.0, 0.0, 0.05)
         k_factor = 1.0 + k_val
 
@@ -76,10 +77,10 @@ with st.sidebar:
         if st.button("➕ Laden"): st.session_state.charges.append({'km': 30, 'pct': 80}); st.rerun()
         for i, c in enumerate(st.session_state.charges):
             lc1, lc2 = st.columns(2)
-            st.session_state.charges[i]['km'] = lc1.number_input(f"km {i}", 0, 250, c['km'], label_visibility="collapsed")
-            st.session_state.charges[i]['pct'] = lc2.number_input(f"% {i}", 1, 100, c['pct'], label_visibility="collapsed")
+            st.session_state.charges[i]['km'] = lc1.number_input(f"km {i}", 0, 250, c['km'], key=f"ckm_{i}")
+            st.session_state.charges[i]['pct'] = lc2.number_input(f"% {i}", 1, 100, c['pct'], key=f"cpct_{i}")
 
-# --- RECHNER ---
+# --- 3. RECHNER ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -115,7 +116,6 @@ if file:
         
         p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(spec['modes'].keys())[-1])
-        # P_mot wird mit dem neutralen k_factor (1.0 +/- X) multipliziert
         p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 150)) * k_factor
         e_seg = (((max(0.01, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
         cons += e_seg
@@ -132,6 +132,7 @@ if file:
     df['color'] = np.select([df['battery_pct']>20, df['battery_pct']>10, df['battery_pct']>0], ['#00CC96', '#FFD700', '#FF4B4B'], default='#85144b')
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
 
+    # --- 4. UI ---
     st.markdown(f"### 🚩 {t_name}")
     c = st.columns(3)
     c[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
@@ -145,12 +146,18 @@ if file:
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
+        
+        # %-Labels obenauf
         m_pts = df[df['marker'].notnull()]
-        fig.add_trace(go.Scatter(x=m_pts['cum_dist'], y=m_pts['ele']+20, mode='markers+text', text=[f"{int(v)}%" for v in m_pts['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
+        if not m_pts.empty:
+            fig.add_trace(go.Scatter(x=m_pts['cum_dist'], y=m_pts['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_pts['marker']], textfont=dict(color="white", size=10), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
+        
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
-        if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+50, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
-        if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+50, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
-        if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+50, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
+        if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+55, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
+        if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+55, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
+        if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+55, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
+        
+        fig.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}_{k_val}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
