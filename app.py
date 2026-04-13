@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. ERWEITERTE MOTOREN-DATENBANK (17 Modelle) ---
+# --- 1. MOTOREN-DATENBANK (17 Modelle) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -34,10 +34,8 @@ BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.65, 0.015
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
-# State Management
 for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
     if key not in st.session_state: st.session_state[key] = []
-if 'points_data' not in st.session_state: st.session_state.points_data = None
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -54,8 +52,8 @@ with st.sidebar:
         extra_load = c2.number_input("Last Kg", 0, 30, 5)
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
-        # NEU: Korrekturfaktor
-        k_factor = st.slider("Korrekturfaktor", 1.0, 2.0, 1.0, 0.05, help="Erhöht den Gesamtverbrauch (z.B. für Gegenwind oder weichen Boden)")
+        # Korrekturfaktor jetzt von -1.0 bis 2.0
+        k_factor = st.slider("Korrekturfaktor", -1.0, 2.0, 1.0, 0.05)
 
     with st.expander("🔋 Akkus", expanded=True):
         m_wh = st.number_input("Hauptakku Wh", 200, 1000, 625)
@@ -76,25 +74,24 @@ with st.sidebar:
     with st.expander("☕ Ladestopps"):
         if st.button("➕ Laden"): st.session_state.charges.append({'km': 30, 'pct': 80}); st.rerun()
         for i, c in enumerate(st.session_state.charges):
-            st.session_state.charges[i]['km'] = st.number_input(f"km Stopp {i}", 0, 250, c['km'])
-            st.session_state.charges[i]['pct'] = st.number_input(f"Ziel % {i}", 1, 100, c['pct'])
+            lc1, lc2 = st.columns(2)
+            st.session_state.charges[i]['km'] = lc1.number_input(f"km {i}", 0, 250, c['km'], label_visibility="collapsed")
+            st.session_state.charges[i]['pct'] = lc2.number_input(f"% {i}", 1, 100, c['pct'], label_visibility="collapsed")
 
-# --- RECHNERKERN ---
+# --- HAUPTFENSTER ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
-    st.session_state.tour_name = gpx.tracks[0].name if gpx.tracks and gpx.tracks[0].name else "Analyse"
     pts, d_acc = [], 0
+    t_name = gpx.tracks[0].name if gpx.tracks and gpx.tracks[0].name else "Analyse"
     for track in gpx.tracks:
         for seg in track.segments:
             for i, p in enumerate(seg.points):
                 d = p.distance_3d(seg.points[i-1]) if i > 0 else 0
                 d_acc += d
                 pts.append({'cum_dist': d_acc/1000, 'dist_diff': d, 'ele': p.elevation, 'lat': p.latitude, 'lon': p.longitude})
-    st.session_state.points_data = pts
-
-if st.session_state.points_data:
-    df = pd.DataFrame(st.session_state.points_data)
+    
+    df = pd.DataFrame(pts)
     total_w = u_weight + BIKE_WEIGHT + extra_load
     df['ele_diff'] = df['ele'].diff().fillna(0)
     df['v_ms'] = np.where(df['ele_diff'] > 0, 15/3.6, v_flat/3.6)
@@ -115,12 +112,10 @@ if st.session_state.points_data:
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0); cons = min(cons, battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)); ev = 'charge'
         
-        p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + \
-                (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
-        
+        p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(spec['modes'].keys())[-1])
-        p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 120)) * k_factor # K-FAKTOR wirkt hier
-        e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
+        p_mot = (p_req - min(p_req / (1 + spec['modes'][m_curr]), 120)) * k_factor
+        e_seg = (((max(0.1, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
         cons += e_seg
         
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack)-1:
@@ -135,7 +130,7 @@ if st.session_state.points_data:
     df['color'] = np.select([df['battery_pct']>20, df['battery_pct']>10, df['battery_pct']>0], ['#00CC96', '#FFD700', '#FF4B4B'], default='#85144b')
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
 
-    st.markdown(f"### 🚩 {st.session_state.tour_name}")
+    st.markdown(f"### 🚩 {t_name}")
     c = st.columns(3)
     c[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
     c[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
@@ -157,7 +152,8 @@ if st.session_state.points_data:
         st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}_{k_factor}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
-        Fullscreen().add_to(m); df_map = df.iloc[::2]
+        Fullscreen().add_to(m)
+        df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
             z_df = df_map[df_map['z_id'] == zid]
             folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6).add_to(m)
