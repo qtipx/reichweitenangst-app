@@ -9,16 +9,16 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- DATEN ---
+# --- KONFIGURATION ---
 MOTOR_SYSTEMS = {
-    "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82, "default_cap": 750},
-    "DJI Avinox (M1/M2)": {"modes": {"Eco": 1.0, "Auto": 2.5, "Trail": 4.5, "Turbo": 7.0}, "efficiency": 0.85, "default_cap": 800},
-    "Pinion MGU (E1.12)": {"modes": {"Eco": 0.8, "Flow": 1.6, "Flex": 2.8, "Fly": 4.0}, "efficiency": 0.77, "default_cap": 800},
-    "Shimano EP801 / EP8": {"modes": {"Eco": 0.6, "Trail": 1.5, "Boost": 3.5}, "efficiency": 0.78, "default_cap": 630}
+    "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82, "default_cap": 625},
+    "DJI Avinox (M1/M2)": {"modes": {"Eco": 1.0, "Auto": 2.5, "Trail": 4.5, "Turbo": 7.0}, "efficiency": 0.85, "default_cap": 625},
+    "Pinion MGU (E1.12)": {"modes": {"Eco": 0.8, "Flow": 1.6, "Flex": 2.8, "Fly": 4.0}, "efficiency": 0.77, "default_cap": 625},
+    "Shimano EP801 / EP8": {"modes": {"Eco": 0.6, "Trail": 1.5, "Boost": 3.5}, "efficiency": 0.78, "default_cap": 625}
 }
 
-# Realistische physikalische Koeffizienten
-BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.65, 0.015 
+# Physikalische Konstanten
+BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.60, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
@@ -28,26 +28,28 @@ for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
 if 'points_data' not in st.session_state: st.session_state.points_data = None
 if 'tour_name' not in st.session_state: st.session_state.tour_name = "Tour Analyse"
 
-# --- SIDEBAR ---
+# --- SIDEBAR MIT LOGO ---
 with st.sidebar:
+    if os.path.exists("reichweitenangst.png"):
+        st.image("reichweitenangst.png", use_container_width=True)
     st.markdown("<h2 style='text-align: center; color: #F7D106;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
+    
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
-    with st.expander("👤 Setup"):
+    with st.expander("👤 Setup", expanded=True):
         u_weight = st.number_input("Fahrer Kg", 50, 150, 95)
         extra_load = st.number_input("Last Kg", 0, 30, 5)
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
 
     with st.expander("🔋 Akkus", expanded=True):
-        m_wh = st.number_input("Hauptakku Wh", 200, 1000, spec['default_cap'])
+        # Defaultwert auf 625 gesetzt
+        m_wh = st.number_input("Hauptakku Wh", 200, 1000, 625)
         if st.button("➕ Extender"): st.session_state.extenders.append({'wh': 250}); st.rerun()
         for i, ext in enumerate(st.session_state.extenders):
-            st.session_state.extenders[i]['wh'] = st.number_input(f"Extender {i+1} Wh", 50, 500, ext['wh'])
+            st.session_state.extenders[i]['wh'] = st.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'])
         if st.button("➕ Ersatz"): st.session_state.spare_batteries.append({'wh': 500}); st.rerun()
-        for i, sp in enumerate(st.session_state.spare_batteries):
-            st.session_state.spare_batteries[i]['wh'] = st.number_input(f"Ersatz {i+1} Wh", 200, 1000, sp['wh'])
 
     with st.expander("⚡ Strategie"):
         if st.button("➕ Wechsel"): st.session_state.modes.append({'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
@@ -62,7 +64,7 @@ with st.sidebar:
             st.session_state.charges[i]['km'] = st.number_input(f"km Stopp {i}", 0, 250, c['km'])
             st.session_state.charges[i]['pct'] = st.number_input(f"Ziel % {i}", 1, 100, c['pct'])
 
-# --- LOGIK ---
+# --- HAUPTFENSTER ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -84,37 +86,33 @@ if st.session_state.points_data:
     df['v_ms'] = np.where(df['ele_diff'] > 0, 15/3.6, v_flat/3.6)
     df['dur'] = df['dist_diff'] / df['v_ms']
     
-    # Akku-System
-    system_cap = m_wh + sum(e['wh'] for e in st.session_state.extenders)
-    battery_stack = [{'cap': system_cap, 'label': 'System'}] + [{'cap': s['wh'], 'label': f'Ersatz {i+1}'} for i, s in enumerate(st.session_state.spare_batteries)]
+    sys_cap = m_wh + sum(e['wh'] for e in st.session_state.extenders)
+    battery_stack = [{'cap': sys_cap, 'label': 'System'}] + [{'cap': s['wh'], 'label': f'Ersatz {i+1}'} for i, s in enumerate(st.session_state.spare_batteries)]
     
     active_c = sorted([dict(c) for c in st.session_state.charges], key=lambda x: x['km'])
     sorted_modes = sorted([dict(m) for m in st.session_state.modes], key=lambda x: x['km'])
     curr_idx, cons, last_p = 0, 0, 100.0
-    pcts, markers, events, b_labels = [], [], [], []
+    pcts, events, markers, b_labels = [], [], [], []
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
 
     for i in range(len(df)):
         km, v = df['cum_dist'].iloc[i], df['v_ms'].iloc[i]
         ev = None
         
-        # Ladestopps
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0)
             target = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
             if cons > target: cons = target
             ev = 'charge'
         
-        # Leistung
         p_req = ((total_w * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / max(df['dur'].iloc[i], 0.1)) + \
                 (total_w * GRAVITY * CRR * v) + (0.5 * AIR_DENSITY * v**3 * CW_AREA)
         
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(spec['modes'].keys())[-1])
-        p_mot = p_req - min(p_req / (1 + spec['modes'][m_curr]), 100) # Eigenleistung ca. 100W
+        p_mot = p_req - min(p_req / (1 + spec['modes'][m_curr]), 120) 
         e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / spec['efficiency']) * tf)
         cons += e_seg
         
-        # Wechsel
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack)-1:
             curr_idx += 1; cons, ev, last_p = 0, 'swap', 100.0
         
@@ -131,11 +129,10 @@ if st.session_state.points_data:
 
     # --- ANZEIGE ---
     st.markdown(f"### 🚩 {st.session_state.tour_name}")
-    c = st.columns(4)
+    c = st.columns(3)
     c[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
     c[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
     c[2].metric("Restakku", f"{df['battery_pct'].iloc[-1]:.1f} %")
-    c[3].metric("Aktiv", df['batt_label'].iloc[-1])
 
     view = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True, label_visibility="collapsed")
     if view == "Höhenprofil":
@@ -150,7 +147,8 @@ if st.session_state.points_data:
         if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+50, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
         if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+50, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
         if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+50, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
-        st.plotly_chart(fig, use_container_width=True, key=f"p_{v_flat}")
+        fig.update_layout(height=600, margin=dict(l=10, r=10, t=10, b=10))
+        st.plotly_chart(fig, use_container_width=True, key=f"plot_{v_flat}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
         Fullscreen().add_to(m)
