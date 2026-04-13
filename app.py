@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. ERWEITERTE MOTOREN-DATENBANK (18 SYSTEME) ---
+# --- 1. ERWEITERTE MOTOREN-DATENBANK ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -31,7 +31,6 @@ MOTOR_SYSTEMS = {
     "Panasonic GX Ultimate": {"modes": {"Eco": 0.70, "Std": 1.50, "Auto": 2.30, "High": 3.00}, "efficiency": 0.78}
 }
 
-# Konstanten (ohne Bike-Gewicht)
 GRAVITY, AIR_DENSITY, CW_AREA, CRR = 9.81, 1.225, 0.58, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
@@ -55,9 +54,7 @@ with st.sidebar:
         c1, c2 = st.columns(2)
         u_weight = c1.number_input("Fahrer Kg", 50, 150, 95)
         extra_load = c2.number_input("Last Kg", 0, 30, 5)
-        # Neues Eingabefeld für Bike Gewicht
         bike_weight = st.number_input("Bike Gewicht Kg", 5.0, 50.0, 25.0, step=0.5)
-        
         temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 10, 45, 25)
         k_val = st.slider("Korrekturfaktor", -1.0, 1.0, 0.0, 0.05)
@@ -65,37 +62,57 @@ with st.sidebar:
 
     with st.expander("🔋 Akkus"):
         m_wh = st.number_input("Hauptakku Wh", 200, 1000, 625)
+        
+        st.markdown("**Extender**")
+        for i, ext in enumerate(st.session_state.extenders):
+            col1, col2 = st.columns([3, 1])
+            ext['wh'] = col1.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'], key=f"ext_val_{i}")
+            if col2.button("🗑️", key=f"del_ext_{i}"):
+                del st.session_state.extenders[i]
+                st.rerun()
         if st.button("➕ Extender"):
             st.session_state.extenders.append({'wh': 250})
             st.rerun()
-        for i, ext in enumerate(st.session_state.extenders):
-            st.session_state.extenders[i]['wh'] = st.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'])
+            
+        st.markdown("**Ersatzakkus**")
+        for i, sp in enumerate(st.session_state.spare_batteries):
+            col1, col2 = st.columns([3, 1])
+            sp['wh'] = col1.number_input(f"Ersatz {i+1} Wh", 200, 1000, sp['wh'], key=f"spare_val_{i}")
+            if col2.button("🗑️", key=f"del_spare_{i}"):
+                del st.session_state.spare_batteries[i]
+                st.rerun()
         if st.button("➕ Ersatz"):
             st.session_state.spare_batteries.append({'wh': 625})
             st.rerun()
-        for i, sp in enumerate(st.session_state.spare_batteries):
-            st.session_state.spare_batteries[i]['wh'] = st.number_input(f"Ersatz {i+1} Wh", 200, 1000, sp['wh'])
 
     with st.expander("⚡ Strategie"):
+        if not st.session_state.modes:
+            st.session_state.modes = [{'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
+            
+        for i, m in enumerate(st.session_state.modes):
+            col1, col2, col3 = st.columns([2, 2, 1])
+            m['km'] = col1.number_input(f"km", 0, 250, m['km'], key=f"mkm_{i}", label_visibility="collapsed")
+            m['mode'] = col2.selectbox(f"Modus", list(spec['modes'].keys()), 
+                                      index=list(spec['modes'].keys()).index(m['mode']) if m['mode'] in spec['modes'] else 0, 
+                                      key=f"mtyp_{i}", label_visibility="collapsed")
+            if col3.button("🗑️", key=f"del_mode_{i}"):
+                del st.session_state.modes[i]
+                st.rerun()
         if st.button("➕ Wechsel"):
             st.session_state.modes.append({'km': 10, 'mode': list(spec['modes'].keys())[0]})
             st.rerun()
-        if not st.session_state.modes:
-            st.session_state.modes = [{'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
-        for i, m in enumerate(st.session_state.modes):
-            st.session_state.modes[i]['km'] = st.number_input(f"km {i}", 0, 250, m['km'], key=f"mkm_{i}")
-            st.session_state.modes[i]['mode'] = st.selectbox(f"Modus {i}", list(spec['modes'].keys()), 
-                                                            index=list(spec['modes'].keys()).index(m['mode']) if m['mode'] in spec['modes'] else 0, 
-                                                            key=f"mtyp_{i}")
 
     with st.expander("☕ Ladestopps"):
+        for i, c in enumerate(st.session_state.charges):
+            col1, col2, col3 = st.columns([2, 2, 1])
+            c['km'] = col1.number_input(f"km", 0, 250, c['km'], key=f"ckm_{i}", label_visibility="collapsed")
+            c['pct'] = col2.number_input(f"%", 1, 100, c['pct'], key=f"cpct_{i}", label_visibility="collapsed")
+            if col3.button("🗑️", key=f"del_charge_{i}"):
+                del st.session_state.charges[i]
+                st.rerun()
         if st.button("➕ Laden"):
             st.session_state.charges.append({'km': 30, 'pct': 80})
             st.rerun()
-        for i, c in enumerate(st.session_state.charges):
-            lc1, lc2 = st.columns(2)
-            st.session_state.charges[i]['km'] = lc1.number_input(f"km Stopp {i}", 0, 250, c['km'], key=f"ckm_{i}")
-            st.session_state.charges[i]['pct'] = lc2.number_input(f"Ziel % {i}", 1, 100, c['pct'], key=f"cpct_{i}")
 
 # --- LOGIK ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
@@ -113,7 +130,6 @@ if file:
 
 if st.session_state.points_data:
     df = pd.DataFrame(st.session_state.points_data)
-    # Gesamtes Gewicht nutzt nun das Eingabefeld bike_weight
     total_w = u_weight + bike_weight + extra_load
     df['ele_diff'] = df['ele'].diff().fillna(0)
     df['v_ms'] = np.where(df['ele_diff'] > 0, 15/3.6, v_flat/3.6)
