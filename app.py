@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- VOLLSTÄNDIGE MOTOREN-DATENBANK (18 MOTOREN) ---
+# --- DATENBANK (18 MOTOREN) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.6, "Tour+": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.80, "drag_factor": 0.6, "default_cap": 750},
     "Bosch CX (Gen4 Old)": {"modes": {"Eco": 0.6, "Tour": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.79, "drag_factor": 0.6, "default_cap": 625},
@@ -122,16 +122,21 @@ def run_calc(points, total_weight, temp, motor_name):
         
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0): ev = 'mode_change' if not ev else ev
 
+        # KRITISCHE PHYSIK-RECHNUNG
         p_slope = total_weight * GRAVITY * (df['ele_diff'].iloc[i] / df['dur'].iloc[i])
         p_resist = (total_weight * GRAVITY * CRR_FOREST * df['v_ms'].iloc[i]) + (0.5 * AIR_DENSITY * df['v_ms'].iloc[i]**3 * CW_AREA)
         p_req = p_slope + p_resist
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(m_spec['modes'].keys())[-1])
         
+        # Korrekturfaktor drag_factor (Wh/km Grundlast)
+        base_drag = m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)
+
         if p_req > 0:
             p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
-            e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / m_spec['efficiency']) + (m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000))) * tf
+            e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / m_spec['efficiency']) + base_drag) * tf
         else:
-            e_seg = m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)
+            # Bergab: Motor unterstützt nicht (0W), Schwerkraft > Reibung. Nur Grundlast bleibt.
+            e_seg = base_drag
         
         cons += e_seg
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack) - 1:
@@ -176,7 +181,6 @@ if st.session_state.points_data:
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
-        
         m_df = df[df['marker'].notnull()]
         if not m_df.empty:
             fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
@@ -198,7 +202,7 @@ if st.session_state.points_data:
             loc = [row['lat'], row['lon']]
             if row['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif row['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
-            elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size:10pt;color:white;background:rgba(0,0,0,0.6);padding:2px 4px;border:1px solid white;">{int(row["marker"])}%</div>')).add_to(m)
+            elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size:10pt;color:white;background:rgba(0,0,0,0.6);padding:2px 4px;border:1px solid white;white-space:nowrap;">{int(row["marker"])}%</div>')).add_to(m)
         folium_static(m, width=1200, height=750)
 
     st.divider()
