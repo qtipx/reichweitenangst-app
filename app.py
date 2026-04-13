@@ -28,7 +28,6 @@ st.set_page_config(page_title="Reichweitenangst", layout="wide")
 for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
     if key not in st.session_state: st.session_state[key] = []
 if 'points_data' not in st.session_state: st.session_state.points_data = None
-if 'tour_name' not in st.session_state: st.session_state.tour_name = ""
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -39,15 +38,14 @@ with st.sidebar:
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
-    # Startwert Logik: km 0 = höchste Unterstützung
     if not st.session_state.modes:
-        highest_mode = list(spec['modes'].keys())[-1]
-        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': highest_mode}]
+        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
     
     with st.expander("👤 Setup"):
         c1, c2 = st.columns(2)
         u_weight, extra_load = c1.number_input("Fahrer Kg", 50, 150, 95), c2.number_input("Last Kg", 0, 30, 5)
-        temp, v_flat = st.slider("Temp °C", -10, 35, 12), st.slider("Ø km/h Ebene", 15, 45, 25)
+        temp = st.slider("Temp °C", -10, 35, 12)
+        v_flat = st.slider("Ø km/h Ebene", 15, 45, 25)
 
     with st.expander("🔋 Akkus", expanded=True):
         m_wh = st.number_input("Hauptakku Wh", 200, 1000, spec['default_cap'], step=10)
@@ -73,7 +71,6 @@ with st.sidebar:
             st.session_state.modes.append({'id': time.time(), 'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
         for i, m in enumerate(st.session_state.modes):
             mc1, mc2, mc3 = st.columns([1.2, 2.5, 0.8])
-            # km 0 Feld für den ersten Eintrag sperren
             val_km = mc1.number_input("km", 0, 250, m['km'], key=f"mkm_{i}", label_visibility="collapsed", disabled=(i==0))
             st.session_state.modes[i]['km'] = val_km
             st.session_state.modes[i]['mode'] = mc2.selectbox("Mod", list(spec['modes'].keys()), key=f"mtyp_{i}", label_visibility="collapsed", index=list(spec['modes'].keys()).index(m['mode']))
@@ -89,11 +86,13 @@ with st.sidebar:
             if lc3.button("🗑️", key=f"cdel_{i}"): st.session_state.charges.pop(i); st.rerun()
 
 # --- RECHNERKERN ---
-def run_calc(points, weight, temp, motor_name):
+def run_calc(points, weight, temp, v_flat_val, motor_name):
     df = pd.DataFrame(points)
     m_spec = MOTOR_SYSTEMS[motor_name]
     df['ele_diff'], df['dist_diff'] = df['ele'].diff().fillna(0), df['dist_diff'].fillna(0)
-    df['v_ms'] = np.where(df['ele_diff'] > 0, 12/3.6, v_flat/3.6)
+    
+    # Hier wird v_flat jetzt dynamisch genutzt
+    df['v_ms'] = np.where(df['ele_diff'] > 0, 12/3.6, v_flat_val/3.6)
     df['dur'] = np.where(df['v_ms'] > 0, df['dist_diff'] / df['v_ms'], 0.1)
     
     main_cap = m_wh + sum(e['wh'] for e in st.session_state.extenders)
@@ -108,7 +107,6 @@ def run_calc(points, weight, temp, motor_name):
     for i in range(len(df)):
         km = df['cum_dist'].iloc[i]
         ev = None
-        
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0); target = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
             if cons > target: cons = target
@@ -117,7 +115,12 @@ def run_calc(points, weight, temp, motor_name):
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0):
             ev = 'mode_change' if not ev else ev
 
-        p_req = ((weight * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / df['dur'].iloc[i]) + (weight * GRAVITY * CRR_FOREST * df['v_ms'].iloc[i]) + (0.5 * AIR_DENSITY * df['v_ms'].iloc[i]**3 * CW_AREA)
+        # Physikalische Berechnung nutzt jetzt v_ms (inkl. v_flat)
+        v = df['v_ms'].iloc[i]
+        p_req = ((weight * GRAVITY * df['ele_diff'].iloc[i].clip(min=0)) / df['dur'].iloc[i]) + \
+                (weight * GRAVITY * CRR_FOREST * v) + \
+                (0.5 * AIR_DENSITY * v**3 * CW_AREA)
+        
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(m_spec['modes'].keys())[-1])
         p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
         e_seg = (m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)) if df['ele_diff'].iloc[i] <= 0 else (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / m_spec['efficiency']) * tf)
@@ -151,7 +154,8 @@ if file:
     st.session_state.points_data = pts
 
 if st.session_state.points_data:
-    df = run_calc(st.session_state.points_data, u_weight+BIKE_WEIGHT+extra_load, temp, sel_motor)
+    # v_flat wird hier übergeben
+    df = run_calc(st.session_state.points_data, u_weight+BIKE_WEIGHT+extra_load, temp, v_flat, sel_motor)
     
     st.markdown(f"### 🚩 {st.session_state.tour_name}")
     cols = st.columns(4)
@@ -174,7 +178,6 @@ if st.session_state.points_data:
         if not m_df.empty:
             fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white", size=10), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
         
-        # FIX: Symbole korrigiert (hexagram statt bolt)
         sw_df, ch_df, st_df = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
         if not sw_df.empty: fig.add_trace(go.Scatter(x=sw_df['cum_dist'], y=sw_df['ele']+60, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
         if not ch_df.empty: fig.add_trace(go.Scatter(x=ch_df['cum_dist'], y=ch_df['ele']+60, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
