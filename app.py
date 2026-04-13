@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. ERWEITERTE MOTOREN-DATENBANK ---
+# --- 1. MOTOREN-DATENBANK (18 SYSTEME) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -65,20 +65,21 @@ with st.sidebar:
         
         st.markdown("**Extender**")
         for i, ext in enumerate(st.session_state.extenders):
-            col1, col2 = st.columns([3, 1])
+            col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
             ext['wh'] = col1.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'], key=f"ext_val_{i}")
-            if col2.button("🗑️", key=f"del_ext_{i}"):
+            if col2.button("🗑️", key=f"del_ext_{i}", use_container_width=True):
                 del st.session_state.extenders[i]
                 st.rerun()
         if st.button("➕ Extender"):
             st.session_state.extenders.append({'wh': 250})
             st.rerun()
             
+        st.divider()
         st.markdown("**Ersatzakkus**")
         for i, sp in enumerate(st.session_state.spare_batteries):
-            col1, col2 = st.columns([3, 1])
+            col1, col2 = st.columns([3, 1], vertical_alignment="bottom")
             sp['wh'] = col1.number_input(f"Ersatz {i+1} Wh", 200, 1000, sp['wh'], key=f"spare_val_{i}")
-            if col2.button("🗑️", key=f"del_spare_{i}"):
+            if col2.button("🗑️", key=f"del_spare_{i}", use_container_width=True):
                 del st.session_state.spare_batteries[i]
                 st.rerun()
         if st.button("➕ Ersatz"):
@@ -90,12 +91,12 @@ with st.sidebar:
             st.session_state.modes = [{'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
             
         for i, m in enumerate(st.session_state.modes):
-            col1, col2, col3 = st.columns([2, 2, 1])
-            m['km'] = col1.number_input(f"km", 0, 250, m['km'], key=f"mkm_{i}", label_visibility="collapsed")
+            col1, col2, col3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+            m['km'] = col1.number_input(f"km", 0, 250, m['km'], key=f"mkm_{i}")
             m['mode'] = col2.selectbox(f"Modus", list(spec['modes'].keys()), 
                                       index=list(spec['modes'].keys()).index(m['mode']) if m['mode'] in spec['modes'] else 0, 
-                                      key=f"mtyp_{i}", label_visibility="collapsed")
-            if col3.button("🗑️", key=f"del_mode_{i}"):
+                                      key=f"mtyp_{i}")
+            if col3.button("🗑️", key=f"del_mode_{i}", use_container_width=True):
                 del st.session_state.modes[i]
                 st.rerun()
         if st.button("➕ Wechsel"):
@@ -104,10 +105,10 @@ with st.sidebar:
 
     with st.expander("☕ Ladestopps"):
         for i, c in enumerate(st.session_state.charges):
-            col1, col2, col3 = st.columns([2, 2, 1])
-            c['km'] = col1.number_input(f"km", 0, 250, c['km'], key=f"ckm_{i}", label_visibility="collapsed")
-            c['pct'] = col2.number_input(f"%", 1, 100, c['pct'], key=f"cpct_{i}", label_visibility="collapsed")
-            if col3.button("🗑️", key=f"del_charge_{i}"):
+            col1, col2, col3 = st.columns([2, 2, 1], vertical_alignment="bottom")
+            c['km'] = col1.number_input(f"km", 0, 250, c['km'], key=f"ckm_{i}")
+            c['pct'] = col2.number_input(f"%", 1, 100, c['pct'], key=f"cpct_{i}")
+            if col3.button("🗑️", key=f"del_charge_{i}", use_container_width=True):
                 del st.session_state.charges[i]
                 st.rerun()
         if st.button("➕ Laden"):
