@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- 1. ERWEITERTE MOTOREN-DATENBANK (18 SYSTEME) ---
+# --- 1. ERWEITERTE MOTOREN-DATENBANK ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
@@ -35,16 +35,14 @@ BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
-# Persistent State Management
 for key in ['charges', 'modes', 'extenders', 'spare_batteries', 'points_data', 't_name']:
     if key not in st.session_state:
         st.session_state[key] = [] if key not in ['points_data', 't_name'] else None
 
-# --- 2. SIDEBAR ---
+# --- SIDEBAR ---
 with st.sidebar:
     if os.path.exists("reichweitenangst.png"):
         st.image("reichweitenangst.png", use_container_width=True)
-    
     st.markdown("<h2 style='text-align: center; color: #F7D106; margin-bottom: 0px;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
     st.markdown("<p style='text-align: center; font-size: 0.9em; margin-top: 0px;'>By Markus Lissner | <a href='mailto:m@lissner.de'>m@lissner.de</a></p>", unsafe_allow_html=True)
     st.divider()
@@ -68,7 +66,6 @@ with st.sidebar:
             st.rerun()
         for i, ext in enumerate(st.session_state.extenders):
             st.session_state.extenders[i]['wh'] = st.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'])
-        
         if st.button("➕ Ersatz"):
             st.session_state.spare_batteries.append({'wh': 625})
             st.rerun()
@@ -96,7 +93,7 @@ with st.sidebar:
             st.session_state.charges[i]['km'] = lc1.number_input(f"km Stopp {i}", 0, 250, c['km'], key=f"ckm_{i}")
             st.session_state.charges[i]['pct'] = lc2.number_input(f"Ziel % {i}", 1, 100, c['pct'], key=f"cpct_{i}")
 
-# --- 3. GPX & PHYSIK ---
+# --- LOGIK ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -126,14 +123,11 @@ if st.session_state.points_data:
     curr_idx, cons, last_p = 0, 0, 100.0
     pcts, events, markers = [], [], []
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
-    
-    # Hilfsliste für Schwellenwerte
     thresholds = [90, 80, 70, 60, 50, 40, 30, 20, 10, 0]
 
     for i in range(len(df)):
         km, v = df['cum_dist'].iloc[i], df['v_ms'].iloc[i]
         ev = None
-        
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0)
             target_cons = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
@@ -152,17 +146,15 @@ if st.session_state.points_data:
         p = max(0, ((battery_stack[curr_idx]['cap'] - cons) / battery_stack[curr_idx]['cap']) * 100)
         pcts.append(p)
         
-        # Korrigierte Marker-Logik
         m_val = np.nan
         for t in thresholds:
-            if last_p >= t and p < t:
+            if last_p > t >= p:
                 m_val = t
                 break
         markers.append(m_val)
         
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0):
             ev = 'mode_change' if not ev else ev
-            
         events.append(ev)
         last_p = p
 
@@ -170,7 +162,7 @@ if st.session_state.points_data:
     df['color'] = np.select([df['battery_pct']>20, df['battery_pct']>10, df['battery_pct']>0], ['#00CC96', '#FFD700', '#FF4B4B'], default='#85144b')
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
 
-    # --- 4. UI ---
+    # --- UI ---
     st.markdown(f"### 🚩 {st.session_state.t_name}")
     c = st.columns(3)
     c[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
@@ -181,27 +173,37 @@ if st.session_state.points_data:
     
     if ansicht == "Höhenprofil":
         fig = go.Figure()
+        # Schatten-Profil
         fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip'))
+        # Farbige Linie
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
-        # %-LABELS & MARKER
+        # %-MARKER MIT ABSTAND
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
-            fig.add_trace(go.Scatter(x=m_pts['cum_dist'], y=m_pts['ele'] + 40, mode='markers+text',
-                text=[f"<b>{int(v)}%</b>" for v in m_pts['marker']], textfont=dict(color="black", size=12), 
-                textposition="top center", marker=dict(color='white', size=8, line=dict(color='black', width=1.5)), showlegend=False))
+            fig.add_trace(go.Scatter(
+                x=m_pts['cum_dist'], 
+                y=m_pts['ele'] + 80, # Höherer Offset gegen Überschneidung
+                mode='markers+text',
+                text=[f"<b>{int(v)}%</b>" for v in m_pts['marker']], 
+                textfont=dict(color="white", size=11), 
+                textposition="top center", 
+                marker=dict(color='rgba(255,255,255,0.8)', size=6, line=dict(color='black', width=1)), 
+                showlegend=False
+            ))
         
         # SYMBOLE
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
-        if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+75, mode='markers', marker=dict(color='#2E91E5', size=14, symbol='square'), name="Wechsel"))
-        if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+75, mode='markers', marker=dict(color='#EF553B', size=14, symbol='star'), name="Laden"))
-        if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+75, mode='markers', marker=dict(color='#FECB52', size=12, symbol='hexagram'), name="Strategie"))
+        if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+120, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
+        if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+120, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
+        if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+120, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
         
-        st.plotly_chart(fig, use_container_width=True, key=f"profile_{v_flat}_{k_val}")
+        fig.update_layout(margin=dict(l=0, r=0, t=20, b=0), height=500, xaxis_title="km", yaxis_title="m", template="plotly_dark")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
+        m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="CartoDB dark_matter")
         Fullscreen().add_to(m)
         df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
@@ -212,5 +214,5 @@ if st.session_state.points_data:
             if r['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif r['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
             elif not np.isnan(r['marker']): 
-                folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size: 11pt; font-weight: bold; color: black; background-color: rgba(255, 255, 255, 0.95); padding: 5px 12px; border-radius: 8px; border: 2px solid black; white-space: nowrap; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);">{int(r["marker"])}%</div>', icon_anchor=(25, 15))).add_to(m)
+                folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size: 10pt; font-weight: bold; color: white; background: rgba(0,0,0,0.6); padding: 2px 5px; border-radius: 4px; border: 1px solid white;">{int(r["marker"])}%</div>')).add_to(m)
         folium_static(m, width=1200, height=750)
