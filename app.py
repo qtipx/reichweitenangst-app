@@ -13,22 +13,17 @@ import os
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.60, "Tour+": 1.40, "eMTB": 2.50, "Turbo": 3.40}, "efficiency": 0.82},
     "Bosch CX (Gen2 - Ritzel)": {"modes": {"Eco": 0.50, "Tour": 1.20, "Sport": 2.10, "Turbo": 3.00}, "efficiency": 0.74},
-    "Bosch Active Line Plus": {"modes": {"Eco": 0.40, "Tour": 1.00, "Sport": 1.80, "Turbo": 2.70}, "efficiency": 0.80},
     "Shimano EP801 / EP8": {"modes": {"Eco": 0.60, "Trail": 1.50, "Boost": 3.50}, "efficiency": 0.79},
-    "Shimano STEPS E8000": {"modes": {"Eco": 0.50, "Trail": 1.10, "Boost": 3.00}, "efficiency": 0.75},
-    "Shimano E6100": {"modes": {"Eco": 0.40, "Norm": 1.00, "High": 2.00}, "efficiency": 0.78},
     "Specialized / Brose Mag S": {"modes": {"Eco": 0.35, "Trail": 1.00, "Turbo": 4.10}, "efficiency": 0.82},
     "DJI Avinox (M1/M2)": {"modes": {"Eco": 1.00, "Auto": 2.50, "Trail": 4.50, "Turbo": 7.00}, "efficiency": 0.85},
-    "Pinion MGU (E1.12)": {"modes": {"Eco": 0.80, "Flow": 1.60, "Flex": 2.80, "Fly": 4.00}, "efficiency": 0.77},
-    "Fazua Ride 60": {"modes": {"Breeze": 0.60, "River": 1.20, "Rocket": 2.50}, "efficiency": 0.83},
-    "TQ HPR50": {"modes": {"Eco": 0.40, "Mid": 1.00, "High": 2.00}, "efficiency": 0.85}
+    "Pinion MGU (E1.12)": {"modes": {"Eco": 0.80, "Flow": 1.60, "Flex": 2.80, "Fly": 4.00}, "efficiency": 0.77}
 }
 
 BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR = 26.0, 9.81, 1.225, 0.58, 0.012 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
-# State Management
+# Persistent State Management
 for key in ['charges', 'modes', 'extenders', 'spare_batteries', 'points_data', 't_name']:
     if key not in st.session_state: st.session_state[key] = [] if 'data' not in key else None
 
@@ -56,24 +51,8 @@ with st.sidebar:
         for i, ext in enumerate(st.session_state.extenders):
             st.session_state.extenders[i]['wh'] = st.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'])
         if st.button("➕ Ersatz"): st.session_state.spare_batteries.append({'wh': 625}); st.rerun()
-        for i, sp in enumerate(st.session_state.spare_batteries):
-            st.session_state.spare_batteries[i]['wh'] = st.number_input(f"Ersatz {i+1} Wh", 200, 1000, sp['wh'])
 
-    with st.expander("⚡ Strategie"):
-        if st.button("➕ Wechsel"): st.session_state.modes.append({'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
-        if not st.session_state.modes: st.session_state.modes = [{'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
-        for i, m in enumerate(st.session_state.modes):
-            st.session_state.modes[i]['km'] = st.number_input(f"km {i}", 0, 250, m['km'], key=f"mkm_{i}")
-            st.session_state.modes[i]['mode'] = st.selectbox(f"Modus {i}", list(spec['modes'].keys()), index=list(spec['modes'].keys()).index(m['mode']) if m['mode'] in spec['modes'] else 0, key=f"mtyp_{i}")
-
-    with st.expander("☕ Ladestopps"):
-        if st.button("➕ Laden"): st.session_state.charges.append({'km': 30, 'pct': 80}); st.rerun()
-        for i, c in enumerate(st.session_state.charges):
-            lc1, lc2 = st.columns(2)
-            st.session_state.charges[i]['km'] = lc1.number_input(f"km {i}", 0, 250, c['km'], key=f"ckm_{i}")
-            st.session_state.charges[i]['pct'] = lc2.number_input(f"% {i}", 1, 100, c['pct'], key=f"cpct_{i}")
-
-# --- GPX & PHYSIK ---
+# --- GPX LOGIK ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -127,7 +106,6 @@ if st.session_state.points_data:
     df['color'] = np.select([df['battery_pct']>20, df['battery_pct']>10, df['battery_pct']>0], ['#00CC96', '#FFD700', '#FF4B4B'], default='#85144b')
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
 
-    # --- UI ---
     st.markdown(f"### 🚩 {st.session_state.t_name}")
     c = st.columns(3)
     c[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
@@ -142,22 +120,24 @@ if st.session_state.points_data:
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
-        # FIX: Marker und Text explizit als oberste Schicht
+        # %-LABELS REPARIERT (mode='markers+text' hinzugefügt)
         m_pts = df[df['marker'].notnull()]
         if not m_pts.empty:
             fig.add_trace(go.Scatter(
-                x=m_pts['cum_dist'], y=m_pts['ele'] + 30, mode='markers+text',
-                text=[f"{int(v)}%" for v in m_pts['marker']],
-                textfont=dict(color="white", size=11, family="Arial Black"),
+                x=m_pts['cum_dist'], 
+                y=m_pts['ele'] + 40, 
+                mode='markers+text',
+                text=[f"<b>{int(v)}%</b>" for v in m_pts['marker']], 
+                textfont=dict(color="black", size=12), 
                 textposition="top center",
-                marker=dict(color='white', size=6, line=dict(color='black', width=1.5)),
+                marker=dict(color='white', size=8, line=dict(color='black', width=1.5)),
                 showlegend=False
             ))
         
         sw, ch, mc = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
-        if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+60, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
-        if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+60, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
-        if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+60, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategie"))
+        if not sw.empty: fig.add_trace(go.Scatter(x=sw['cum_dist'], y=sw['ele']+70, mode='markers', marker=dict(color='#2E91E5', size=14, symbol='square'), name="Wechsel"))
+        if not ch.empty: fig.add_trace(go.Scatter(x=ch['cum_dist'], y=ch['ele']+70, mode='markers', marker=dict(color='#EF553B', size=14, symbol='star'), name="Laden"))
+        if not mc.empty: fig.add_trace(go.Scatter(x=mc['cum_dist'], y=mc['ele']+70, mode='markers', marker=dict(color='#FECB52', size=12, symbol='hexagram'), name="Strategie"))
         st.plotly_chart(fig, use_container_width=True, key=f"profile_{v_flat}_{k_val}")
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13)
@@ -169,17 +149,18 @@ if st.session_state.points_data:
             loc = [r['lat'], r['lon']]
             if r['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif r['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
-            # FIX: Breiterer Hintergrund für %-Zahlen auf der Map
+            # MAP LABEL OPTIMIERT (Größere Box, besserer Kontrast)
             elif not np.isnan(r['marker']): 
                 html_icon = f'''
                     <div style="
                         font-size: 11pt; font-weight: bold; color: black; 
-                        background-color: rgba(255, 255, 255, 0.9); 
-                        padding: 4px 10px; border-radius: 6px; 
-                        border: 2px solid #333; white-space: nowrap;
+                        background-color: rgba(255, 255, 255, 0.95); 
+                        padding: 5px 12px; border-radius: 8px; 
+                        border: 2px solid black; white-space: nowrap;
+                        box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
                     ">
                         {int(r["marker"])}%
                     </div>
                 '''
-                folium.Marker(loc, icon=folium.DivIcon(html=html_icon, icon_anchor=(25, 12))).add_to(m)
+                folium.Marker(loc, icon=folium.DivIcon(html=html_icon, icon_anchor=(25, 15))).add_to(m)
         folium_static(m, width=1200, height=750)
