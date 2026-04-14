@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- VOLLSTÄNDIGE DATENBANK (18 MOTOREN) ---
+# --- DATENBANK (ALLE 18 MOTOREN) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.6, "Tour+": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.80, "drag_factor": 0.6, "default_cap": 750},
     "Bosch CX (Gen4 Old)": {"modes": {"Eco": 0.6, "Tour": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.79, "drag_factor": 0.6, "default_cap": 625},
@@ -47,12 +47,15 @@ with st.sidebar:
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
+    if not st.session_state.modes:
+        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
+
     with st.expander("👤 Setup", expanded=True):
         u_weight = st.number_input("Fahrer Kg", 50, 150, 95)
         bike_weight = st.number_input("Fahrrad Kg", 10.0, 35.0, 24.5, step=0.5)
-        extra_load = st.number_input("Zusatzlast Kg", 0, 30, 5)
+        extra_load = st.number_input("Last Kg", 0, 30, 5)
         st.divider()
-        corr_factor = st.slider("Korrekturfaktor (Boden/Wind)", -1.0, 1.0, 0.0, 0.1)
+        corr_factor = st.slider("Korrekturfaktor (Wind/Boden)", -1.0, 1.0, 0.0, 0.1)
         temp = st.slider("Temperatur °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 15, 45, 25)
 
@@ -70,7 +73,7 @@ with st.sidebar:
             if c2.button("🗑️", key=f"dsp_{i}"): st.session_state.spare_batteries.pop(i); st.rerun()
 
     with st.expander("⚡ Strategie"):
-        if st.button("➕ Moduswechsel"): st.session_state.modes.append({'id': time.time(), 'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
+        if st.button("➕ Wechsel"): st.session_state.modes.append({'id': time.time(), 'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
         for i, m in enumerate(st.session_state.modes):
             mc1, mc2, mc3 = st.columns([1.2, 2.5, 0.8])
             st.session_state.modes[i]['km'] = mc1.number_input("km", 0, 250, m['km'], key=f"mkm_{i}", disabled=(i==0))
@@ -85,7 +88,7 @@ with st.sidebar:
             st.session_state.charges[i]['pct'] = lc2.number_input("%", 1, 100, c['pct'], key=f"cpct_{i}")
             if lc3.button("🗑️", key=f"cdel_{i}"): st.session_state.charges.pop(i); st.rerun()
 
-# --- RECHNERKERN (FIX: BERGAB PHYSIK) ---
+# --- RECHNERKERN ---
 def run_calc(points, total_weight, temp, corr, motor_name):
     df = pd.DataFrame(points)
     m_spec = MOTOR_SYSTEMS[motor_name]
@@ -102,39 +105,35 @@ def run_calc(points, total_weight, temp, corr, motor_name):
     sorted_modes = sorted([dict(m) for m in st.session_state.modes], key=lambda x: x['km'])
     
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
-    eff_corr = m_spec['efficiency'] * (1.0 + (corr * 0.15))
+    eff_corr = m_spec['efficiency'] * (1.0 + (corr * 0.1))
 
     for i in range(len(df)):
-        km = df['cum_dist'].iloc[i]
+        km, ele_d = df['cum_dist'].iloc[i], df['ele_diff'].iloc[i]
         ev = None
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0); target = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
             if cons > target: cons = target
             ev = 'charge'
-        
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0): ev = 'mode_change' if not ev else ev
 
-        p_slope = total_weight * GRAVITY * (df['ele_diff'].iloc[i] / df['dur'].iloc[i])
+        p_slope = total_weight * GRAVITY * (ele_d / df['dur'].iloc[i])
         p_resist = (total_weight * GRAVITY * CRR_FOREST * df['v_ms'].iloc[i]) + (0.5 * AIR_DENSITY * df['v_ms'].iloc[i]**3 * CW_AREA)
-        
-        p_netto = p_slope + p_resist # Benötigte Leistung gegen Physik
+        p_req = p_slope + p_resist
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(m_spec['modes'].keys())[-1])
-        
-        # Systemgrundlast (Standby/Elektronik) pro km
         base_drag = m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)
 
-        if p_netto > 0:
-            # Bergauf oder Ebene: Motor liefert Unterstützung
-            p_mot = p_netto - min(p_netto / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
+        if ele_d > 0: # Bergauf
+            p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
             e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / eff_corr) + base_drag) * tf
-        else:
-            # BERGAB: Schwerkraft zieht stärker als Reibung bremst -> Motor verbraucht NULL
-            e_seg = base_drag # Nur minimale Grundlast des Systems bleibt
-
+        elif ele_d < -0.1: # Bergab (Korrektur!)
+            e_seg = base_drag * 0.5 # Nur minimaler Eigenverbrauch
+        else: # Ebene
+            p_mot = max(0, p_resist - (p_resist / (1 + m_spec['modes'][m_curr])))
+            e_seg = ((p_mot * df['dur'].iloc[i] / 3600) / eff_corr + base_drag) * tf
+        
         cons += e_seg
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack) - 1:
             curr_idx += 1; cons, ev, last_p = 0, 'swap', 100.0
-            
         p = max(0, ((battery_stack[curr_idx]['cap'] - cons) / battery_stack[curr_idx]['cap']) * 100)
         pcts.append(p); events.append(ev); labels.append(battery_stack[curr_idx]['label'])
         m_val = next((t for t in [90, 80, 70, 60, 50, 40, 30, 20, 10, 0] if last_p > t >= p), np.nan)
@@ -145,7 +144,7 @@ def run_calc(points, total_weight, temp, corr, motor_name):
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
     return df
 
-# --- UI MAIN ---
+# --- UI ---
 file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
@@ -160,7 +159,7 @@ if file:
 
 if st.session_state.points_data:
     df = run_calc(st.session_state.points_data, u_weight + extra_load + bike_weight, temp, corr_factor, sel_motor)
-    st.markdown(f"### 🚩 Tour-Analyse")
+    st.markdown(f"### 🚩 Tour-Analyse | {df['cum_dist'].iloc[-1]:.1f} km | {df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
     cols = st.columns(4)
     cols[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
     cols[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
@@ -175,13 +174,10 @@ if st.session_state.points_data:
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         m_df = df[df['marker'].notnull()]
-        if not m_df.empty:
-            fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4)))
-        
+        fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4)))
         for ev_type, color, symbol, name in [('swap', '#2E91E5', 'square', 'Wechsel'), ('charge', '#EF553B', 'star', 'Laden'), ('mode_change', '#FECB52', 'hexagram', 'Strategie')]:
             ev_df = df[df['event'] == ev_type]
             if not ev_df.empty: fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol), name=name))
-        
         fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
     else:
@@ -199,4 +195,6 @@ if st.session_state.points_data:
         folium_static(m, width=1200, height=750)
 
     st.divider()
-    st.table(pd.DataFrame({"Faktor": ["Geschwindigkeit", "Trittfrequenz", "Reifendruck", "Gewicht"], "Tipp": ["Ab 20 km/h steigt Luftwiderstand massiv", "Effizienz bei 75-90 UpM am höchsten", "Asphalt: hoher Druck spart bis 10%", "Jedes kg am Berg kostet Wh"]}))
+    st.subheader("💡 Optimierung der Reichweite")
+    tips = {"Faktor": ["Geschwindigkeit", "Trittfrequenz", "Reifendruck", "Gewicht"], "Tipp": ["Ab 20 km/h steigt Luftwiderstand massiv", "Effizienz bei 75-90 UpM am höchsten", "Asphalt: hoher Druck spart bis 10%", "Jedes kg am Berg kostet Wh"]}
+    st.table(pd.DataFrame(tips))
