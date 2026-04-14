@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- DATENBANK (18 MOTOREN) ---
+# --- VOLLSTÄNDIGE DATENBANK (18 MOTOREN) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.6, "Tour+": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.80, "drag_factor": 0.6, "default_cap": 750},
     "Bosch CX (Gen4 Old)": {"modes": {"Eco": 0.6, "Tour": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.79, "drag_factor": 0.6, "default_cap": 625},
@@ -42,14 +42,25 @@ for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
 # --- SIDEBAR ---
 with st.sidebar:
     if os.path.exists("reichweitenangst.png"): st.image("reichweitenangst.png", use_container_width=True)
-    st.markdown("<h2 style='text-align: center; color: #F7D106;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align: center; color: #F7D106; margin-bottom: 0px;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='text-align: center; margin-top: -5px; margin-bottom: 20px;'>
+        <p style='font-size: 0.8em; color: #aaa;'>
+            By Markus Lissner | <a href='mailto:m@lissner.de' style='color: #F7D106; text-decoration: none;'>m@lissner.de</a>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
+    if not st.session_state.modes:
+        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
+
     with st.expander("👤 Setup", expanded=True):
         u_weight = st.number_input("Fahrer Kg", 50, 150, 95)
         bike_weight = st.number_input("Fahrrad Kg", 10.0, 35.0, 24.5, step=0.5)
-        extra_load = st.number_input("Zusatzlast Kg", 0, 30, 5)
+        extra_load = st.number_input("Last Kg", 0, 30, 5)
         st.divider()
         corr_factor = st.slider("Korrekturfaktor (Wind/Boden)", -1.0, 1.0, 0.0, 0.1)
         temp = st.slider("Temp °C", -10, 35, 12)
@@ -121,7 +132,7 @@ def run_calc(points, total_weight, temp, corr, motor_name):
         if ele_d > 0: # Bergauf
             p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
             e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / eff_corr) + base_drag) * tf
-        elif ele_d < -0.1: # Bergab
+        elif ele_d < -0.1: # Bergab: Verbrauch auf Null/Systemlast
             e_seg = base_drag * 0.5 
         else: # Ebene
             p_mot = max(0, p_resist - (p_resist / (1 + m_spec['modes'][m_curr])))
@@ -157,7 +168,6 @@ if file:
 if st.session_state.points_data:
     df = run_calc(st.session_state.points_data, u_weight + extra_load + bike_weight, temp, corr_factor, sel_motor)
     
-    # NEUES HEADER-LAYOUT
     st.markdown(f"### 🚩 {st.session_state.tour_name}")
     st.write(f"**Tour-Analyse:** {df['cum_dist'].iloc[-1]:.1f} km | {df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
     
@@ -184,7 +194,6 @@ if st.session_state.points_data:
             if not ev_df.empty:
                 fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol), name=name))
         
-        # LEGENDE MITTIG & OHNE TRACE
         fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
         st.plotly_chart(fig, use_container_width=True)
     else:
