@@ -9,7 +9,7 @@ from streamlit_folium import folium_static
 import time
 import os
 
-# --- DATENBANK (ALLE 18 MOTOREN) ---
+# --- DATENBANK (18 MOTOREN) ---
 MOTOR_SYSTEMS = {
     "Bosch Smart System (Gen4)": {"modes": {"Eco": 0.6, "Tour+": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.80, "drag_factor": 0.6, "default_cap": 750},
     "Bosch CX (Gen4 Old)": {"modes": {"Eco": 0.6, "Tour": 1.4, "eMTB": 2.5, "Turbo": 3.4}, "efficiency": 0.79, "drag_factor": 0.6, "default_cap": 625},
@@ -35,10 +35,9 @@ GRAVITY, AIR_DENSITY, CW_AREA, CRR_FOREST = 9.81, 1.225, 0.72, 0.045
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
-# State Management
+if 'points_data' not in st.session_state: st.session_state.points_data = None
 for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
     if key not in st.session_state: st.session_state[key] = []
-if 'points_data' not in st.session_state: st.session_state.points_data = None
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -47,16 +46,13 @@ with st.sidebar:
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
-    if not st.session_state.modes:
-        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
-
     with st.expander("👤 Setup", expanded=True):
         u_weight = st.number_input("Fahrer Kg", 50, 150, 95)
         bike_weight = st.number_input("Fahrrad Kg", 10.0, 35.0, 24.5, step=0.5)
-        extra_load = st.number_input("Last Kg", 0, 30, 5)
+        extra_load = st.number_input("Zusatzlast Kg", 0, 30, 5)
         st.divider()
         corr_factor = st.slider("Korrekturfaktor (Wind/Boden)", -1.0, 1.0, 0.0, 0.1)
-        temp = st.slider("Temperatur °C", -10, 35, 12)
+        temp = st.slider("Temp °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 15, 45, 25)
 
     with st.expander("🔋 Akkus", expanded=True):
@@ -125,8 +121,8 @@ def run_calc(points, total_weight, temp, corr, motor_name):
         if ele_d > 0: # Bergauf
             p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
             e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / eff_corr) + base_drag) * tf
-        elif ele_d < -0.1: # Bergab (Korrektur!)
-            e_seg = base_drag * 0.5 # Nur minimaler Eigenverbrauch
+        elif ele_d < -0.1: # Bergab
+            e_seg = base_drag * 0.5 
         else: # Ebene
             p_mot = max(0, p_resist - (p_resist / (1 + m_spec['modes'][m_curr])))
             e_seg = ((p_mot * df['dur'].iloc[i] / 3600) / eff_corr + base_drag) * tf
@@ -144,10 +140,11 @@ def run_calc(points, total_weight, temp, corr, motor_name):
     df['z_id'] = (df['color'] != df['color'].shift(1)).cumsum()
     return df
 
-# --- UI ---
-file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
+# --- MAIN UI ---
+file = st.file_uploader("GPX laden", type=["gpx"])
 if file:
     gpx = gpxpy.parse(file)
+    st.session_state.tour_name = gpx.tracks[0].name if gpx.tracks and gpx.tracks[0].name else file.name
     pts, d_acc = [], 0
     for track in gpx.tracks:
         for seg in track.segments:
@@ -159,7 +156,11 @@ if file:
 
 if st.session_state.points_data:
     df = run_calc(st.session_state.points_data, u_weight + extra_load + bike_weight, temp, corr_factor, sel_motor)
-    st.markdown(f"### 🚩 Tour-Analyse | {df['cum_dist'].iloc[-1]:.1f} km | {df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
+    
+    # NEUES HEADER-LAYOUT
+    st.markdown(f"### 🚩 {st.session_state.tour_name}")
+    st.write(f"**Tour-Analyse:** {df['cum_dist'].iloc[-1]:.1f} km | {df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
+    
     cols = st.columns(4)
     cols[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
     cols[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
@@ -169,16 +170,22 @@ if st.session_state.points_data:
     view = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True, label_visibility="collapsed")
     if view == "Höhenprofil":
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip'))
+        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip', showlegend=False))
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
+        
         m_df = df[df['marker'].notnull()]
-        fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4)))
+        if not m_df.empty:
+            fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4), name="Akku %"))
+        
         for ev_type, color, symbol, name in [('swap', '#2E91E5', 'square', 'Wechsel'), ('charge', '#EF553B', 'star', 'Laden'), ('mode_change', '#FECB52', 'hexagram', 'Strategie')]:
             ev_df = df[df['event'] == ev_type]
-            if not ev_df.empty: fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol), name=name))
-        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            if not ev_df.empty:
+                fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol), name=name))
+        
+        # LEGENDE MITTIG & OHNE TRACE
+        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5))
         st.plotly_chart(fig, use_container_width=True)
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="OpenStreetMap")
@@ -193,8 +200,3 @@ if st.session_state.points_data:
             elif row['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
             elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size:10pt;color:white;background:rgba(0,0,0,0.6);padding:2px 4px;border:1px solid white;white-space:nowrap;">{int(row["marker"])}%</div>')).add_to(m)
         folium_static(m, width=1200, height=750)
-
-    st.divider()
-    st.subheader("💡 Optimierung der Reichweite")
-    tips = {"Faktor": ["Geschwindigkeit", "Trittfrequenz", "Reifendruck", "Gewicht"], "Tipp": ["Ab 20 km/h steigt Luftwiderstand massiv", "Effizienz bei 75-90 UpM am höchsten", "Asphalt: hoher Druck spart bis 10%", "Jedes kg am Berg kostet Wh"]}
-    st.table(pd.DataFrame(tips))
