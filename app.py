@@ -133,7 +133,7 @@ def run_calc(points, total_weight, temp, corr, motor_name):
             p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
             e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / eff_corr) + base_drag) * tf
         elif ele_d < -0.1: # Bergab: Verbrauch auf Null/Systemlast
-            e_seg = base_drag * 0.5 
+            e_seg = base_drag * 0.05 
         else: # Ebene
             p_mot = max(0, p_resist - (p_resist / (1 + m_spec['modes'][m_curr])))
             e_seg = ((p_mot * df['dur'].iloc[i] / 3600) / eff_corr + base_drag) * tf
