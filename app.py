@@ -47,15 +47,12 @@ with st.sidebar:
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
-    if not st.session_state.modes:
-        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
-
     with st.expander("👤 Setup", expanded=True):
         u_weight = st.number_input("Fahrer Kg", 50, 150, 95)
         bike_weight = st.number_input("Fahrrad Kg", 10.0, 35.0, 24.5, step=0.5)
-        extra_load = st.number_input("Last Kg", 0, 30, 5)
+        extra_load = st.number_input("Zusatzlast Kg", 0, 30, 5)
         st.divider()
-        corr_factor = st.slider("Korrekturfaktor (Wind/Boden)", -1.0, 1.0, 0.0, 0.1)
+        corr_factor = st.slider("Korrekturfaktor (Boden/Wind)", -1.0, 1.0, 0.0, 0.1)
         temp = st.slider("Temperatur °C", -10, 35, 12)
         v_flat = st.slider("Ø km/h Ebene", 15, 45, 25)
 
@@ -88,7 +85,7 @@ with st.sidebar:
             st.session_state.charges[i]['pct'] = lc2.number_input("%", 1, 100, c['pct'], key=f"cpct_{i}")
             if lc3.button("🗑️", key=f"cdel_{i}"): st.session_state.charges.pop(i); st.rerun()
 
-# --- RECHNERKERN ---
+# --- RECHNERKERN (FIX: BERGAB PHYSIK) ---
 def run_calc(points, total_weight, temp, corr, motor_name):
     df = pd.DataFrame(points)
     m_spec = MOTOR_SYSTEMS[motor_name]
@@ -105,12 +102,11 @@ def run_calc(points, total_weight, temp, corr, motor_name):
     sorted_modes = sorted([dict(m) for m in st.session_state.modes], key=lambda x: x['km'])
     
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
-    eff_corr = m_spec['efficiency'] * (1.0 + (corr * 0.1)) # Korrekturfaktor wirkt auf Effizienz
+    eff_corr = m_spec['efficiency'] * (1.0 + (corr * 0.15))
 
     for i in range(len(df)):
         km = df['cum_dist'].iloc[i]
         ev = None
-        
         if active_c and km >= active_c[0]['km']:
             c = active_c.pop(0); target = battery_stack[curr_idx]['cap'] * (1 - c['pct']/100)
             if cons > target: cons = target
@@ -118,21 +114,23 @@ def run_calc(points, total_weight, temp, corr, motor_name):
         
         if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0): ev = 'mode_change' if not ev else ev
 
-        # PHYSIK BERGAB FIX
         p_slope = total_weight * GRAVITY * (df['ele_diff'].iloc[i] / df['dur'].iloc[i])
         p_resist = (total_weight * GRAVITY * CRR_FOREST * df['v_ms'].iloc[i]) + (0.5 * AIR_DENSITY * df['v_ms'].iloc[i]**3 * CW_AREA)
-        p_req = p_slope + p_resist
+        
+        p_netto = p_slope + p_resist # Benötigte Leistung gegen Physik
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(m_spec['modes'].keys())[-1])
         
+        # Systemgrundlast (Standby/Elektronik) pro km
         base_drag = m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)
 
-        if p_req > 0:
-            p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
+        if p_netto > 0:
+            # Bergauf oder Ebene: Motor liefert Unterstützung
+            p_mot = p_netto - min(p_netto / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
             e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / eff_corr) + base_drag) * tf
         else:
-            # BERGAB: Motorverbrauch = 0W, nur Systemlast
-            e_seg = base_drag
-        
+            # BERGAB: Schwerkraft zieht stärker als Reibung bremst -> Motor verbraucht NULL
+            e_seg = base_drag # Nur minimale Grundlast des Systems bleibt
+
         cons += e_seg
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack) - 1:
             curr_idx += 1; cons, ev, last_p = 0, 'swap', 100.0
@@ -148,7 +146,7 @@ def run_calc(points, total_weight, temp, corr, motor_name):
     return df
 
 # --- UI MAIN ---
-file = st.file_uploader("GPX laden", type=["gpx"])
+file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
 if file:
     gpx = gpxpy.parse(file)
     pts, d_acc = [], 0
@@ -162,25 +160,29 @@ if file:
 
 if st.session_state.points_data:
     df = run_calc(st.session_state.points_data, u_weight + extra_load + bike_weight, temp, corr_factor, sel_motor)
-    st.markdown(f"### 🚩 Tour-Analyse | {df['cum_dist'].iloc[-1]:.1f} km | {df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
-    
-    view = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True)
+    st.markdown(f"### 🚩 Tour-Analyse")
+    cols = st.columns(4)
+    cols[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
+    cols[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
+    cols[2].metric("Restakku", f"{df['battery_pct'].iloc[-1]:.1f} %")
+    cols[3].metric("Aktiv", df['batt_label'].iloc[-1])
+
+    view = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True, label_visibility="collapsed")
     if view == "Höhenprofil":
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0)))
+        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip'))
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
-        
-        # Marker & Events
         m_df = df[df['marker'].notnull()]
-        fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+20, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textposition="top center", marker=dict(color='white')))
+        if not m_df.empty:
+            fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white"), textposition="top center", marker=dict(color='white', size=4)))
         
-        for ev_type, color, symbol in [('swap', '#2E91E5', 'square'), ('charge', '#EF553B', 'star'), ('mode_change', '#FECB52', 'hexagram')]:
+        for ev_type, color, symbol, name in [('swap', '#2E91E5', 'square', 'Wechsel'), ('charge', '#EF553B', 'star', 'Laden'), ('mode_change', '#FECB52', 'hexagram', 'Strategie')]:
             ev_df = df[df['event'] == ev_type]
-            if not ev_df.empty: fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol)))
+            if not ev_df.empty: fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol), name=name))
         
-        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10))
+        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
         st.plotly_chart(fig, use_container_width=True)
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="OpenStreetMap")
@@ -188,11 +190,13 @@ if st.session_state.points_data:
         df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
             z_df = df_map[df_map['z_id'] == zid]
-            folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6).add_to(m)
-        
+            folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6, opacity=0.8).add_to(m)
         for _, row in df[df['event'].notnull() | df['marker'].notnull()].iterrows():
             loc = [row['lat'], row['lon']]
             if row['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif row['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
-            elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size:10pt;color:white;background:rgba(0,0,0,0.6);padding:2px 4px;border:1px solid white;">{int(row["marker"])}%</div>')).add_to(m)
+            elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size:10pt;color:white;background:rgba(0,0,0,0.6);padding:2px 4px;border:1px solid white;white-space:nowrap;">{int(row["marker"])}%</div>')).add_to(m)
         folium_static(m, width=1200, height=750)
+
+    st.divider()
+    st.table(pd.DataFrame({"Faktor": ["Geschwindigkeit", "Trittfrequenz", "Reifendruck", "Gewicht"], "Tipp": ["Ab 20 km/h steigt Luftwiderstand massiv", "Effizienz bei 75-90 UpM am höchsten", "Asphalt: hoher Druck spart bis 10%", "Jedes kg am Berg kostet Wh"]}))
