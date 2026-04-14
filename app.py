@@ -31,7 +31,7 @@ MOTOR_SYSTEMS = {
     "Bafang M510 / M620": {"modes": {"1": 0.5, "2": 1.2, "3": 2.2, "4": 3.5, "5": 5.0}, "efficiency": 0.72, "drag_factor": 1.1, "default_cap": 840}
 }
 
-BIKE_WEIGHT, GRAVITY, AIR_DENSITY, CW_AREA, CRR_FOREST = 26.0, 9.81, 1.225, 0.72, 0.045 
+GRAVITY, AIR_DENSITY, CW_AREA, CRR_FOREST = 9.81, 1.225, 0.72, 0.045 
 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
@@ -39,66 +39,57 @@ st.set_page_config(page_title="Reichweitenangst", layout="wide")
 for key in ['charges', 'modes', 'extenders', 'spare_batteries']:
     if key not in st.session_state: st.session_state[key] = []
 if 'points_data' not in st.session_state: st.session_state.points_data = None
-if 'tour_name' not in st.session_state: st.session_state.tour_name = ""
 
 # --- SIDEBAR ---
 with st.sidebar:
-    if os.path.exists("reichweitenangst.png"):
-        st.image("reichweitenangst.png", use_container_width=True)
+    if os.path.exists("reichweitenangst.png"): st.image("reichweitenangst.png", use_container_width=True)
     st.markdown("<h2 style='text-align: center; color: #F7D106;'>REICHWEITENANGST</h2>", unsafe_allow_html=True)
-    
     sel_motor = st.selectbox("Motor", list(MOTOR_SYSTEMS.keys()), index=0)
     spec = MOTOR_SYSTEMS[sel_motor]
     
     if not st.session_state.modes:
-        highest_mode = list(spec['modes'].keys())[-1]
-        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': highest_mode}]
-    
-    with st.expander("👤 Setup"):
-        c1, c2 = st.columns(2)
-        u_weight, extra_load = c1.number_input("Fahrer Kg", 50, 150, 95), c2.number_input("Last Kg", 0, 30, 5)
-        temp, v_flat = st.slider("Temp °C", -10, 35, 12), st.slider("Ø km/h Ebene", 15, 45, 25)
+        st.session_state.modes = [{'id': 1, 'km': 0, 'mode': list(spec['modes'].keys())[-1]}]
+
+    with st.expander("👤 Setup", expanded=True):
+        u_weight = st.number_input("Fahrer Kg", 50, 150, 95)
+        bike_weight = st.number_input("Fahrrad Kg", 10.0, 35.0, 24.5, step=0.5)
+        extra_load = st.number_input("Last Kg", 0, 30, 5)
+        st.divider()
+        corr_factor = st.slider("Korrekturfaktor (Wind/Boden)", -1.0, 1.0, 0.0, 0.1)
+        temp = st.slider("Temperatur °C", -10, 35, 12)
+        v_flat = st.slider("Ø km/h Ebene", 15, 45, 25)
 
     with st.expander("🔋 Akkus", expanded=True):
         m_wh = st.number_input("Hauptakku Wh", 200, 1000, spec['default_cap'], step=10)
-        st.divider()
-        h1, h2 = st.columns([3, 1])
-        h1.markdown("**+ Extender**")
-        if h2.button("➕", key="add_ex"): st.session_state.extenders.append({'wh': 250}); st.rerun()
+        if st.button("➕ Extender"): st.session_state.extenders.append({'wh': 250}); st.rerun()
         for i, ext in enumerate(st.session_state.extenders):
-            col1, col2 = st.columns([4, 1])
-            st.session_state.extenders[i]['wh'] = col1.number_input("Wh", 50, 500, ext['wh'], key=f"ex_{i}", label_visibility="collapsed")
-            if col2.button("🗑️", key=f"dex_{i}"): st.session_state.extenders.pop(i); st.rerun()
-        st.divider()
-        h3, h4 = st.columns([3, 1])
-        h3.markdown("**+ Ersatz**")
-        if h4.button("➕", key="add_sp"): st.session_state.spare_batteries.append({'wh': spec['default_cap']}); st.rerun()
+            c1, c2 = st.columns([4, 1])
+            st.session_state.extenders[i]['wh'] = c1.number_input(f"Ex {i+1} Wh", 50, 500, ext['wh'], key=f"ex_{i}")
+            if c2.button("🗑️", key=f"dex_{i}"): st.session_state.extenders.pop(i); st.rerun()
+        if st.button("➕ Ersatzakku"): st.session_state.spare_batteries.append({'wh': spec['default_cap']}); st.rerun()
         for i, sp in enumerate(st.session_state.spare_batteries):
-            col1, col2 = st.columns([4, 1])
-            st.session_state.spare_batteries[i]['wh'] = col1.number_input("Wh", 200, 1000, sp['wh'], key=f"sp_{i}", label_visibility="collapsed")
-            if col2.button("🗑️", key=f"dsp_{i}"): st.session_state.spare_batteries.pop(i); st.rerun()
+            c1, c2 = st.columns([4, 1])
+            st.session_state.spare_batteries[i]['wh'] = c1.number_input(f"Sp {i+1} Wh", 200, 1000, sp['wh'], key=f"sp_{i}")
+            if c2.button("🗑️", key=f"dsp_{i}"): st.session_state.spare_batteries.pop(i); st.rerun()
 
     with st.expander("⚡ Strategie"):
-        if st.button("➕ Wechsel", use_container_width=True): 
-            st.session_state.modes.append({'id': time.time(), 'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
+        if st.button("➕ Moduswechsel"): st.session_state.modes.append({'id': time.time(), 'km': 10, 'mode': list(spec['modes'].keys())[0]}); st.rerun()
         for i, m in enumerate(st.session_state.modes):
             mc1, mc2, mc3 = st.columns([1.2, 2.5, 0.8])
-            val_km = mc1.number_input("km", 0, 250, m['km'], key=f"mkm_{i}", label_visibility="collapsed", disabled=(i==0))
-            st.session_state.modes[i]['km'] = val_km
-            st.session_state.modes[i]['mode'] = mc2.selectbox("Mod", list(spec['modes'].keys()), key=f"mtyp_{i}", label_visibility="collapsed", index=list(spec['modes'].keys()).index(m['mode']))
+            st.session_state.modes[i]['km'] = mc1.number_input("km", 0, 250, m['km'], key=f"mkm_{i}", disabled=(i==0))
+            st.session_state.modes[i]['mode'] = mc2.selectbox("Mod", list(spec['modes'].keys()), key=f"mtyp_{i}", index=list(spec['modes'].keys()).index(m['mode']))
             if i > 0 and mc3.button("🗑️", key=f"mdel_{i}"): st.session_state.modes.pop(i); st.rerun()
 
     with st.expander("☕ Ladestopps"):
-        if st.button("➕ Laden", use_container_width=True): 
-            st.session_state.charges.append({'id': time.time(), 'km': 30, 'pct': 80}); st.rerun()
+        if st.button("➕ Laden"): st.session_state.charges.append({'id': time.time(), 'km': 30, 'pct': 80}); st.rerun()
         for i, c in enumerate(st.session_state.charges):
             lc1, lc2, lc3 = st.columns([1.5, 1.5, 0.8])
-            st.session_state.charges[i]['km'] = lc1.number_input("km", 0, 250, c['km'], key=f"ckm_{i}", label_visibility="collapsed")
-            st.session_state.charges[i]['pct'] = lc2.number_input("%", 1, 100, c['pct'], key=f"cpct_{i}", label_visibility="collapsed")
+            st.session_state.charges[i]['km'] = lc1.number_input("km", 0, 250, c['km'], key=f"ckm_{i}")
+            st.session_state.charges[i]['pct'] = lc2.number_input("%", 1, 100, c['pct'], key=f"cpct_{i}")
             if lc3.button("🗑️", key=f"cdel_{i}"): st.session_state.charges.pop(i); st.rerun()
 
 # --- RECHNERKERN ---
-def run_calc(points, weight, temp, motor_name):
+def run_calc(points, total_weight, temp, corr, motor_name):
     df = pd.DataFrame(points)
     m_spec = MOTOR_SYSTEMS[motor_name]
     df['ele_diff'], df['dist_diff'] = df['ele'].diff().fillna(0), df['dist_diff'].fillna(0)
@@ -112,7 +103,9 @@ def run_calc(points, weight, temp, motor_name):
     pcts, events, markers, labels = [], [], [], []
     active_c = sorted([dict(c) for c in st.session_state.charges], key=lambda x: x['km'])
     sorted_modes = sorted([dict(m) for m in st.session_state.modes], key=lambda x: x['km'])
+    
     tf = 1.0 + (max(0, 20 - temp) * 0.008)
+    eff_corr = m_spec['efficiency'] * (1.0 + (corr * 0.1)) # Korrekturfaktor wirkt auf Effizienz
 
     for i in range(len(df)):
         km = df['cum_dist'].iloc[i]
@@ -123,23 +116,22 @@ def run_calc(points, weight, temp, motor_name):
             if cons > target: cons = target
             ev = 'charge'
         
-        if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0):
-            ev = 'mode_change' if not ev else ev
+        if any(abs(m['km'] - km) < 0.05 for m in sorted_modes if m['km'] > 0): ev = 'mode_change' if not ev else ev
 
-        # Leistungberechnung
-        p_slope = weight * GRAVITY * (df['ele_diff'].iloc[i] / df['dur'].iloc[i])
-        p_resist = (weight * GRAVITY * CRR_FOREST * df['v_ms'].iloc[i]) + (0.5 * AIR_DENSITY * df['v_ms'].iloc[i]**3 * CW_AREA)
+        # PHYSIK BERGAB FIX
+        p_slope = total_weight * GRAVITY * (df['ele_diff'].iloc[i] / df['dur'].iloc[i])
+        p_resist = (total_weight * GRAVITY * CRR_FOREST * df['v_ms'].iloc[i]) + (0.5 * AIR_DENSITY * df['v_ms'].iloc[i]**3 * CW_AREA)
         p_req = p_slope + p_resist
-        
         m_curr = next((m['mode'] for m in reversed(sorted_modes) if km >= m['km']), list(m_spec['modes'].keys())[-1])
         
-        # FIX: Bergab-Logik (P_req <= 0)
+        base_drag = m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)
+
         if p_req > 0:
             p_mot = p_req - min(p_req / (1 + m_spec['modes'][m_curr]), 125 * 1.5)
-            e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / m_spec['efficiency']) * tf)
+            e_seg = (((max(0, p_mot) * df['dur'].iloc[i] / 3600) / eff_corr) + base_drag) * tf
         else:
-            # Nur System-Eigenverbrauch bergab
-            e_seg = m_spec['drag_factor'] * (df['dist_diff'].iloc[i]/1000)
+            # BERGAB: Motorverbrauch = 0W, nur Systemlast
+            e_seg = base_drag
         
         cons += e_seg
         if cons >= battery_stack[curr_idx]['cap'] and curr_idx < len(battery_stack) - 1:
@@ -156,10 +148,9 @@ def run_calc(points, weight, temp, motor_name):
     return df
 
 # --- UI MAIN ---
-file = st.file_uploader("GPX laden", type=["gpx"], label_visibility="collapsed")
+file = st.file_uploader("GPX laden", type=["gpx"])
 if file:
     gpx = gpxpy.parse(file)
-    st.session_state.tour_name = gpx.tracks[0].name if gpx.tracks and gpx.tracks[0].name else file.name
     pts, d_acc = [], 0
     for track in gpx.tracks:
         for seg in track.segments:
@@ -170,53 +161,38 @@ if file:
     st.session_state.points_data = pts
 
 if st.session_state.points_data:
-    df = run_calc(st.session_state.points_data, u_weight+BIKE_WEIGHT+extra_load, temp, sel_motor)
+    df = run_calc(st.session_state.points_data, u_weight + extra_load + bike_weight, temp, corr_factor, sel_motor)
+    st.markdown(f"### 🚩 Tour-Analyse | {df['cum_dist'].iloc[-1]:.1f} km | {df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
     
-    st.markdown(f"### 🚩 {st.session_state.tour_name}")
-    cols = st.columns(4)
-    cols[0].metric("Distanz", f"{df['cum_dist'].iloc[-1]:.1f} km")
-    cols[1].metric("Höhenmeter", f"{df['ele'].diff().clip(lower=0).sum():.0f} hm ↑")
-    cols[2].metric("Restakku", f"{df['battery_pct'].iloc[-1]:.1f} %")
-    cols[3].metric("Aktiv", df['batt_label'].iloc[-1])
-
-    st.divider()
-    view_option = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True, label_visibility="collapsed")
-    
-    if view_option == "Höhenprofil":
+    view = st.radio("Ansicht:", ["Höhenprofil", "Karte"], horizontal=True)
+    if view == "Höhenprofil":
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0), hoverinfo='skip'))
+        fig.add_trace(go.Scatter(x=df['cum_dist'], y=df['ele'], fill='tozeroy', fillcolor='rgba(100,100,100,0.1)', line=dict(width=0)))
         for zid in df['z_id'].unique():
             z_df = df[df['z_id'] == zid]
             fig.add_trace(go.Scatter(x=z_df['cum_dist'], y=z_df['ele'], mode='lines', line=dict(color=z_df['color'].iloc[-1], width=5), showlegend=False))
         
+        # Marker & Events
         m_df = df[df['marker'].notnull()]
-        if not m_df.empty:
-            fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+30, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textfont=dict(color="white", size=10), textposition="top center", marker=dict(color='white', size=4), showlegend=False))
+        fig.add_trace(go.Scatter(x=m_df['cum_dist'], y=m_df['ele']+20, mode='markers+text', text=[f"{int(v)}%" for v in m_df['marker']], textposition="top center", marker=dict(color='white')))
         
-        sw_df, ch_df, st_df = df[df['event'] == 'swap'], df[df['event'] == 'charge'], df[df['event'] == 'mode_change']
-        if not sw_df.empty: fig.add_trace(go.Scatter(x=sw_df['cum_dist'], y=sw_df['ele']+60, mode='markers', marker=dict(color='#2E91E5', size=12, symbol='square'), name="Wechsel"))
-        if not ch_df.empty: fig.add_trace(go.Scatter(x=ch_df['cum_dist'], y=ch_df['ele']+60, mode='markers', marker=dict(color='#EF553B', size=12, symbol='star'), name="Laden"))
-        if not st_df.empty: fig.add_trace(go.Scatter(x=st_df['cum_dist'], y=st_df['ele']+60, mode='markers', marker=dict(color='#FECB52', size=10, symbol='hexagram'), name="Strategiewechsel"))
-
-        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10), legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        for ev_type, color, symbol in [('swap', '#2E91E5', 'square'), ('charge', '#EF553B', 'star'), ('mode_change', '#FECB52', 'hexagram')]:
+            ev_df = df[df['event'] == ev_type]
+            if not ev_df.empty: fig.add_trace(go.Scatter(x=ev_df['cum_dist'], y=ev_df['ele']+60, mode='markers', marker=dict(color=color, size=12, symbol=symbol)))
+        
+        fig.update_layout(height=650, margin=dict(l=10, r=10, t=10, b=10))
         st.plotly_chart(fig, use_container_width=True)
-        
     else:
         m = folium.Map(location=[df['lat'].mean(), df['lon'].mean()], zoom_start=13, tiles="OpenStreetMap")
         Fullscreen().add_to(m)
         df_map = df.iloc[::2]
         for zid in df_map['z_id'].unique():
             z_df = df_map[df_map['z_id'] == zid]
-            folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6, opacity=0.8).add_to(m)
+            folium.PolyLine(z_df[['lat', 'lon']].values.tolist(), color=z_df['color'].iloc[0], weight=6).add_to(m)
+        
         for _, row in df[df['event'].notnull() | df['marker'].notnull()].iterrows():
             loc = [row['lat'], row['lon']]
             if row['event'] == 'charge': folium.Marker(loc, icon=folium.Icon(color='orange', icon='bolt', prefix='fa')).add_to(m)
             elif row['event'] == 'swap': folium.Marker(loc, icon=folium.Icon(color='blue', icon='refresh', prefix='fa')).add_to(m)
-            elif row['event'] == 'mode_change': folium.Marker(loc, icon=folium.Icon(color='lightgray', icon='gear', prefix='fa')).add_to(m)
-            elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size: 10pt; font-weight: bold; color: white; background: rgba(0,0,0,0.6); padding: 2px 4px; border-radius: 4px; border: 1px solid white; white-space:nowrap;">{int(row["marker"])}%</div>')).add_to(m)
+            elif not np.isnan(row['marker']): folium.Marker(loc, icon=folium.DivIcon(html=f'<div style="font-size:10pt;color:white;background:rgba(0,0,0,0.6);padding:2px 4px;border:1px solid white;">{int(row["marker"])}%</div>')).add_to(m)
         folium_static(m, width=1200, height=750)
-
-    st.divider()
-    st.subheader("💡 Optimierung der Reichweite")
-    tips = {"Faktor": ["Geschwindigkeit", "Trittfrequenz", "Reifendruck", "Gewicht", "Temperatur"], "Auswirkung": ["Luftwiderstand steigt quadratisch ab 20 km/h", "Motoren arbeiten effizienter bei 75-90 UpM", "Höherer Rollwiderstand auf Asphalt kostet bis zu 10%", "Jedes kg am Berg benötigt zusätzliche Wh", "Akkukapazität sinkt bei Kälte (Referenz 20°C)"], "Tipp": ["In der Ebene 2-3 km/h langsamer fahren", "Kleineren Gang wählen statt mehr Unterstützung", "Max. zulässigen Druck für Untergrund nutzen", "Ausrüstung im Rucksack kritisch prüfen", "Akku erst kurz vor Start einsetzen"]}
-    st.table(pd.DataFrame(tips))
