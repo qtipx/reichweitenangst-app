@@ -32,7 +32,7 @@ MOTOR_SYSTEMS = {
 }
 
 GRAVITY, AIR_DENSITY, CW_AREA, CRR_FOREST = 9.81, 1.225, 0.72, 0.045 
-
+ 
 st.set_page_config(page_title="Reichweitenangst", layout="wide")
 
 if 'points_data' not in st.session_state: st.session_state.points_data = None
